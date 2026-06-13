@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:postgres/postgres.dart';
 
-import '../../database/db.dart';
 import 'event_model.dart';
+import 'i_sync_repository.dart';
 
 const _matTable = {
   'species': 'mat_species',
@@ -16,7 +16,11 @@ const _matTable = {
 const _validEntityTypes = {'species', 'plant', 'entry', 'location', 'soil'};
 const _validOperations = {'create', 'update', 'delete'};
 
-class SyncRepository {
+class SyncRepository implements ISyncRepository {
+  const SyncRepository(this._db);
+  final Pool _db;
+
+  @override
   Future<({List<int> accepted, List<ConflictResult> conflicts})> pushEvents(
     String userId,
     String deviceId,
@@ -25,7 +29,7 @@ class SyncRepository {
     final accepted = <int>[];
     final conflicts = <ConflictResult>[];
 
-    await db.runTx((session) async {
+    await _db.runTx((session) async {
       for (final event in events) {
         if (!_validEntityTypes.contains(event.entityType) ||
             !_validOperations.contains(event.operation)) {
@@ -88,9 +92,8 @@ class SyncRepository {
       parameters: {'id': entityId, 'userId': userId},
     );
 
-    if (matRow.isNotEmpty) return null; // entity exists, no conflict
+    if (matRow.isNotEmpty) return null;
 
-    // Entity missing from materialized state — was it deleted?
     final lastEvent = await session.execute(
       Sql.named('''
         SELECT payload FROM sync_events
@@ -101,7 +104,7 @@ class SyncRepository {
       parameters: {'userId': userId, 'entityId': entityId},
     );
 
-    if (lastEvent.isEmpty) return null; // entity never existed here, let it through
+    if (lastEvent.isEmpty) return null;
 
     return (
       reason: 'entity_deleted_on_server',
@@ -125,7 +128,6 @@ class SyncRepository {
         parameters: {'id': event.entityId, 'userId': userId},
       );
     } else {
-      // LWW: only update if the incoming event is newer
       await session.execute(
         Sql.named('''
           INSERT INTO $table (entity_id, user_id, payload, server_timestamp)
@@ -145,13 +147,14 @@ class SyncRepository {
     }
   }
 
+  @override
   Future<List<SyncEvent>> pullEvents(
     String userId,
     String deviceId,
     int since,
     int limit,
   ) async {
-    final result = await db.execute(
+    final result = await _db.execute(
       Sql.named('''
         SELECT id, device_id, entity_type, entity_id, operation, payload, server_timestamp
         FROM sync_events
@@ -182,8 +185,9 @@ class SyncRepository {
         .toList();
   }
 
+  @override
   Future<void> ackCursor(String deviceId, int cursor) async {
-    await db.execute(
+    await _db.execute(
       Sql.named('''
         INSERT INTO device_cursors (device_id, last_pulled_cursor)
         VALUES (@deviceId, @cursor)
@@ -195,9 +199,10 @@ class SyncRepository {
     );
   }
 
+  @override
   Future<Map<String, dynamic>> getStatus(
       String userId, String deviceId) async {
-    final cursorRow = await db.execute(
+    final cursorRow = await _db.execute(
       Sql.named(
           'SELECT last_pulled_cursor FROM device_cursors WHERE device_id = @id'),
       parameters: {'id': deviceId},
@@ -205,14 +210,14 @@ class SyncRepository {
     final lastPulled =
         cursorRow.isNotEmpty ? (cursorRow.first[0] as int) : 0;
 
-    final latestRow = await db.execute(
+    final latestRow = await _db.execute(
       Sql.named(
           'SELECT COALESCE(MAX(id), 0) FROM sync_events WHERE user_id = @userId'),
       parameters: {'userId': userId},
     );
     final serverLatest = (latestRow.first[0] as num).toInt();
 
-    final countRow = await db.execute(
+    final countRow = await _db.execute(
       Sql.named('''
         SELECT COUNT(*)
         FROM sync_events
