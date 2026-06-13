@@ -42,9 +42,68 @@ dart compile exe bin/server.dart -o polypodium_server
 
 # Lint
 dart analyze
+
+# Testes
+dart test
 ```
 
 As migrações DDL rodam automaticamente na inicialização (`CREATE TABLE IF NOT EXISTS`). Não há ferramenta de migration separada.
+
+## Estrutura do projeto
+
+```
+bin/
+└── server.dart               # bootstrap: banco, DI, pipeline, serve
+
+lib/
+├── core/
+│   ├── config.dart           # variáveis de ambiente
+│   └── token_service.dart    # ITokenService + JwtTokenService
+├── database/
+│   └── db.dart               # initDatabase() → Pool + migrações
+├── features/
+│   ├── auth/
+│   │   ├── i_auth_repository.dart
+│   │   ├── auth_repository.dart
+│   │   └── auth_handler.dart
+│   └── sync/
+│       ├── i_sync_repository.dart
+│       ├── sync_repository.dart
+│       ├── sync_handler.dart
+│       └── event_model.dart
+├── middleware/
+│   ├── auth_middleware.dart
+│   ├── cors_middleware.dart
+│   └── error_middleware.dart
+├── routes/
+│   ├── auth_routes.dart      # POST /register, /login
+│   ├── sync_routes.dart      # rotas de sync + authMiddleware
+│   └── router.dart           # monta todos os mounts + /health
+└── server/
+    └── ssl.dart              # buildSslContext()
+
+test/
+├── features/auth/
+│   └── auth_handler_test.dart
+└── features/sync/
+    └── sync_handler_test.dart
+```
+
+### Injeção de dependência
+
+`server.dart` é o único composition root. A árvore de dependências é montada explicitamente:
+
+```
+Pool (postgres)
+ ├── AuthRepository(pool)  →  AuthHandler(repo, tokens)
+ └── SyncRepository(pool)  →  SyncHandler(repo)
+
+JwtTokenService(secret)
+ ├── AuthHandler(repo, tokens)
+ └── authMiddleware(tokens)
+```
+
+Handlers dependem de interfaces (`IAuthRepository`, `ISyncRepository`, `ITokenService`), o que permite substituir implementações em testes sem banco de dados.
 
 ## Fluxo de sincronização
 
@@ -65,7 +124,7 @@ O app envia um array de eventos locais pendentes:
       "entityType": "plant",
       "entityId": "uuid-da-entidade",
       "operation": "create",
-      "payload": { ... },
+      "payload": { },
       "clientTimestamp": "2026-06-13T10:00:00Z"
     }
   ]
@@ -93,7 +152,7 @@ Retorna eventos de `sync_events` **de outros dispositivos** (`device_id != dispo
 
 ```json
 {
-  "events": [ { "id": 7, "entityType": "plant", "operation": "create", "payload": { ... }, ... } ],
+  "events": [ { "id": 7, "entityType": "plant", "operation": "create", "payload": { }, "..." : "..." } ],
   "nextCursor": 7,
   "hasMore": false
 }
