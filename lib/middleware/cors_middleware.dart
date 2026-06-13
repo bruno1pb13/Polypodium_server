@@ -1,6 +1,6 @@
 import 'package:shelf/shelf.dart';
 
-import '../config.dart';
+import '../core/config.dart';
 
 Middleware corsMiddleware() {
   return (Handler inner) {

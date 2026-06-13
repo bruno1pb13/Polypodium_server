@@ -1,18 +1,11 @@
 import 'package:postgres/postgres.dart';
-import '../config.dart';
+import '../core/config.dart';
 
-Pool? _pool;
-
-Pool get db {
-  if (_pool == null) throw StateError('Database not initialized.');
-  return _pool!;
-}
-
-Future<void> initDatabase() async {
+Future<Pool> initDatabase() async {
   final uri = Uri.parse(Config.databaseUrl);
   final userInfo = uri.userInfo.split(':');
 
-  _pool = Pool.withEndpoints(
+  final pool = Pool.withEndpoints(
     [
       Endpoint(
         host: uri.host,
@@ -28,11 +21,12 @@ Future<void> initDatabase() async {
     ),
   );
 
-  await _runMigrations();
+  await _runMigrations(pool);
+  return pool;
 }
 
-Future<void> _runMigrations() async {
-  await db.execute(Sql('''
+Future<void> _runMigrations(Pool pool) async {
+  await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS users (
       id           TEXT PRIMARY KEY,
       email        TEXT UNIQUE NOT NULL,
@@ -41,7 +35,7 @@ Future<void> _runMigrations() async {
     )
   '''));
 
-  await db.execute(Sql('''
+  await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS devices (
       id           TEXT PRIMARY KEY,
       user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -51,7 +45,7 @@ Future<void> _runMigrations() async {
     )
   '''));
 
-  await db.execute(Sql('''
+  await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS sync_events (
       id               BIGSERIAL PRIMARY KEY,
       device_id        TEXT NOT NULL REFERENCES devices(id),
@@ -65,16 +59,16 @@ Future<void> _runMigrations() async {
     )
   '''));
 
-  await db.execute(
+  await pool.execute(
       Sql('CREATE INDEX IF NOT EXISTS idx_sync_events_user_id ON sync_events(user_id)'));
-  await db.execute(
+  await pool.execute(
       Sql('CREATE INDEX IF NOT EXISTS idx_sync_events_cursor ON sync_events(id)'));
-  await db.execute(Sql('''
+  await pool.execute(Sql('''
     CREATE INDEX IF NOT EXISTS idx_sync_events_entity
       ON sync_events(user_id, entity_id, id DESC)
   '''));
 
-  await db.execute(Sql('''
+  await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS device_cursors (
       device_id          TEXT PRIMARY KEY REFERENCES devices(id),
       last_pulled_cursor BIGINT NOT NULL DEFAULT 0
@@ -88,7 +82,7 @@ Future<void> _runMigrations() async {
     'mat_locations',
     'mat_soils',
   ]) {
-    await db.execute(Sql('''
+    await pool.execute(Sql('''
       CREATE TABLE IF NOT EXISTS $table (
         entity_id        TEXT PRIMARY KEY,
         user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

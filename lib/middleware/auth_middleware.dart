@@ -1,11 +1,10 @@
 import 'dart:convert';
 
-import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:shelf/shelf.dart';
 
-import '../config.dart';
+import '../core/token_service.dart';
 
-Middleware authMiddleware() {
+Middleware authMiddleware(ITokenService tokens) {
   return (Handler inner) {
     return (Request request) async {
       final authHeader =
@@ -14,7 +13,8 @@ Middleware authMiddleware() {
       if (authHeader == null || !authHeader.startsWith('Bearer ')) {
         return Response(
           401,
-          body: jsonEncode({'error': 'missing or invalid Authorization header'}),
+          body: jsonEncode(
+              {'error': 'missing or invalid Authorization header'}),
           headers: {'Content-Type': 'application/json'},
         );
       }
@@ -22,32 +22,20 @@ Middleware authMiddleware() {
       final token = authHeader.substring(7);
 
       try {
-        final jwt = JWT.verify(token, SecretKey(Config.jwtSecret));
-        final payload = jwt.payload as Map<String, dynamic>;
-        final userId = jwt.subject;
-        final deviceId = payload['deviceId'] as String?;
-
-        if (userId == null || deviceId == null) {
-          return Response(
-            401,
-            body: jsonEncode({'error': 'malformed token claims'}),
-            headers: {'Content-Type': 'application/json'},
-          );
-        }
-
+        final claims = tokens.verify(token);
         return inner(request.change(
-          context: {'userId': userId, 'deviceId': deviceId},
+          context: {'userId': claims.userId, 'deviceId': claims.deviceId},
         ));
-      } on JWTExpiredException {
+      } on TokenExpiredException {
         return Response(
           401,
           body: jsonEncode({'error': 'token expired'}),
           headers: {'Content-Type': 'application/json'},
         );
-      } on JWTException catch (e) {
+      } on InvalidTokenException catch (e) {
         return Response(
           401,
-          body: jsonEncode({'error': 'invalid token: ${e.message}'}),
+          body: jsonEncode({'error': e.message}),
           headers: {'Content-Type': 'application/json'},
         );
       }

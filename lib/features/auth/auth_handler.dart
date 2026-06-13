@@ -1,17 +1,18 @@
 import 'dart:convert';
 
 import 'package:bcrypt/bcrypt.dart';
-import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:shelf/shelf.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../config.dart';
-import 'auth_repository.dart';
+import '../../core/token_service.dart';
+import 'i_auth_repository.dart';
 
 final _uuid = const Uuid();
 
 class AuthHandler {
-  final _repo = AuthRepository();
+  const AuthHandler(this._repo, this._tokens);
+  final IAuthRepository _repo;
+  final ITokenService _tokens;
 
   Future<Response> register(Request request) async {
     final body =
@@ -39,7 +40,7 @@ class AuthHandler {
     await _repo.upsertDevice(deviceId, userId, null);
 
     return _json(201, {
-      'token': _sign(userId, deviceId),
+      'token': _tokens.sign(userId, deviceId),
       'userId': userId,
       'deviceId': deviceId,
     });
@@ -69,18 +70,10 @@ class AuthHandler {
     await _repo.touchDevice(resolvedDeviceId);
 
     return _json(200, {
-      'token': _sign(user['id'] as String, resolvedDeviceId),
+      'token': _tokens.sign(user['id'] as String, resolvedDeviceId),
       'userId': user['id'],
       'deviceId': resolvedDeviceId,
     });
-  }
-
-  String _sign(String userId, String deviceId) {
-    final jwt = JWT({'deviceId': deviceId}, subject: userId);
-    return jwt.sign(
-      SecretKey(Config.jwtSecret),
-      expiresIn: const Duration(days: 30),
-    );
   }
 }
 

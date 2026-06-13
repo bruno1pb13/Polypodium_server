@@ -1,9 +1,13 @@
 import 'package:postgres/postgres.dart';
-import '../../database/db.dart';
+import 'i_auth_repository.dart';
 
-class AuthRepository {
+class AuthRepository implements IAuthRepository {
+  const AuthRepository(this._db);
+  final Pool _db;
+
+  @override
   Future<Map<String, dynamic>?> findUserByEmail(String email) async {
-    final result = await db.execute(
+    final result = await _db.execute(
       Sql.named(
           'SELECT id, email, password_hash FROM users WHERE email = @email'),
       parameters: {'email': email},
@@ -17,9 +21,10 @@ class AuthRepository {
     };
   }
 
+  @override
   Future<Map<String, dynamic>> createUser(
       String id, String email, String passwordHash) async {
-    await db.execute(
+    await _db.execute(
       Sql.named(
           'INSERT INTO users (id, email, password_hash) VALUES (@id, @email, @hash)'),
       parameters: {'id': id, 'email': email, 'hash': passwordHash},
@@ -27,9 +32,10 @@ class AuthRepository {
     return {'id': id, 'email': email};
   }
 
+  @override
   Future<void> upsertDevice(
       String deviceId, String userId, String? deviceName) async {
-    await db.execute(
+    await _db.execute(
       Sql.named('''
         INSERT INTO devices (id, user_id, name)
         VALUES (@id, @userId, @name)
@@ -37,7 +43,7 @@ class AuthRepository {
       '''),
       parameters: {'id': deviceId, 'userId': userId, 'name': deviceName},
     );
-    await db.execute(
+    await _db.execute(
       Sql.named('''
         INSERT INTO device_cursors (device_id, last_pulled_cursor)
         VALUES (@deviceId, 0)
@@ -47,8 +53,9 @@ class AuthRepository {
     );
   }
 
+  @override
   Future<Map<String, dynamic>?> findDeviceById(String deviceId) async {
-    final result = await db.execute(
+    final result = await _db.execute(
       Sql.named('SELECT id, user_id FROM devices WHERE id = @id'),
       parameters: {'id': deviceId},
     );
@@ -57,8 +64,9 @@ class AuthRepository {
     return {'id': row[0] as String, 'userId': row[1] as String};
   }
 
+  @override
   Future<void> touchDevice(String deviceId) async {
-    await db.execute(
+    await _db.execute(
       Sql.named('UPDATE devices SET last_seen_at = NOW() WHERE id = @id'),
       parameters: {'id': deviceId},
     );
