@@ -4,10 +4,11 @@ import 'dart:math' as math;
 import 'package:shelf/shelf.dart';
 
 import 'event_model.dart';
-import 'sync_repository.dart';
+import 'i_sync_repository.dart';
 
 class SyncHandler {
-  final _repo = SyncRepository();
+  const SyncHandler(this._repo);
+  final ISyncRepository _repo;
 
   Future<Response> push(Request request) async {
     final userId = request.context['userId'] as String;
@@ -47,7 +48,8 @@ class SyncHandler {
 
     final params = request.url.queryParameters;
     final since = math.max(0, int.tryParse(params['since'] ?? '0') ?? 0);
-    final limit = (int.tryParse(params['limit'] ?? '100') ?? 100).clamp(1, 1000);
+    final limit =
+        (int.tryParse(params['limit'] ?? '100') ?? 100).clamp(1, 1000);
 
     final events = await _repo.pullEvents(userId, deviceId, since, limit);
     final nextCursor = events.isNotEmpty ? events.last.id : since;
