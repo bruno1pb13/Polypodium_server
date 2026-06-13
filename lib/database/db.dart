@@ -1,5 +1,5 @@
 import 'package:postgres/postgres.dart';
-import '../config.dart';
+import '../core/config.dart';
 
 Future<Pool> initDatabase() async {
   final uri = Uri.parse(Config.databaseUrl);
