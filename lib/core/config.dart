@@ -18,4 +18,7 @@ class Config {
 
   static final String allowedOrigins =
       Platform.environment['ALLOWED_ORIGINS'] ?? '*';
+
+  static final String photosDir =
+      Platform.environment['PHOTOS_DIR'] ?? './photos';
 }
