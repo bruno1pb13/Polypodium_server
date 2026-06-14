@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:shelf/shelf.dart';
 
 class PhotoHandler {
@@ -8,6 +9,11 @@ class PhotoHandler {
   final String _photosDir;
 
   Future<Response> upload(Request request, String photoKey) async {
+    final safeKey = p.basename(photoKey);
+    if (safeKey.isEmpty || safeKey != photoKey) {
+      return _error(400, 'invalid photo key');
+    }
+
     final userId = request.context['userId'] as String;
     final userDir = Directory('$_photosDir/$userId');
     if (!userDir.existsSync()) await userDir.create(recursive: true);
@@ -17,18 +23,21 @@ class PhotoHandler {
         .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk));
     if (bytes.isEmpty) return _error(400, 'empty body');
 
-    await File('${userDir.path}/$photoKey').writeAsBytes(bytes);
-    return _json(200, {'ok': true, 'photoKey': photoKey});
+    await File('${userDir.path}/$safeKey').writeAsBytes(bytes);
+    return _json(200, {'ok': true, 'photoKey': safeKey});
   }
 
   Future<Response> download(Request request, String photoKey) async {
+    final safeKey = p.basename(photoKey);
+    if (safeKey.isEmpty) return _error(400, 'invalid photo key');
+
     final userId = request.context['userId'] as String;
-    final file = File('$_photosDir/$userId/$photoKey');
+    final file = File('$_photosDir/$userId/$safeKey');
     if (!file.existsSync()) return _error(404, 'photo not found');
 
     return Response.ok(
       await file.readAsBytes(),
-      headers: {'Content-Type': _contentType(photoKey)},
+      headers: {'Content-Type': _contentType(safeKey)},
     );
   }
 
