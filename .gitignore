@@ -23,4 +23,4 @@ Thumbs.db
 .env.*
 !.env.example
 
-photos/
+/photos
