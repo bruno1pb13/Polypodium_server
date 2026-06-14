@@ -21,7 +21,7 @@ Router buildRouter({
       ..mount('/api/v1/auth/', buildAuthRouter(auth).call)
       ..mount('/api/v1/sync/', buildSyncHandler(sync, tokens))
       ..mount('/api/v1/photos/', buildPhotoHandler(photos, tokens))
-      ..get('/health', _health);
+      ..get('/api/v1/health', _health);
 
 Response _health(Request _) => Response.ok(
       jsonEncode({'status': 'ok', 'version': '1.0.0'}),
