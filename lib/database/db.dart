@@ -17,7 +17,7 @@ Future<Pool> initDatabase() async {
     ],
     settings: PoolSettings(
       maxConnectionCount: 10,
-      sslMode: Config.isDevelopment ? SslMode.disable : SslMode.require,
+      sslMode: Config.dbSsl ? SslMode.require : SslMode.disable,
     ),
   );
 
