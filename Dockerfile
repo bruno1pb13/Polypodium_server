@@ -15,5 +15,12 @@ RUN apt-get update \
 
 COPY --from=build /server /server
 
+RUN mkdir -p /photos
+
+VOLUME ["/photos"]
+
+ENV PHOTOS_DIR=/photos
+ENV PORT=8080
+
 EXPOSE 8080
 ENTRYPOINT ["/server"]

@@ -13,6 +13,8 @@ class Config {
   static final String jwtSecret = Platform.environment['JWT_SECRET'] ??
       'dev-secret-change-in-production-min-32-chars!!';
 
+  static final bool dbSsl = (Platform.environment['DB_SSL'] ?? (isDevelopment ? 'false' : 'true')) == 'true';
+
   static final int port =
       int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
 

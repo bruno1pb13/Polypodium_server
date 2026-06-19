@@ -1,0 +1,5 @@
+.dart_tool/
+.git/
+.env
+photos/
+output_prod.log
