@@ -30,6 +30,29 @@ void main() {
         headers: {'content-type': 'application/json'},
       );
 
+  Request _get(String path) =>
+      Request('GET', Uri.parse('http://localhost$path'));
+
+  group('status', () {
+    test('hasUsers is false when there are no users', () async {
+      when(() => repo.countUsers()).thenAnswer((_) async => 0);
+
+      final res = await handler.status(_get('/status'));
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['hasUsers'], false);
+    });
+
+    test('hasUsers is true when at least one user exists', () async {
+      when(() => repo.countUsers()).thenAnswer((_) async => 1);
+
+      final res = await handler.status(_get('/status'));
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['hasUsers'], true);
+    });
+  });
+
   group('register', () {
     test('400 when email is empty', () async {
       final res = await handler
