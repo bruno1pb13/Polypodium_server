@@ -6,6 +6,12 @@ class AuthRepository implements IAuthRepository {
   final Pool _db;
 
   @override
+  Future<int> countUsers() async {
+    final result = await _db.execute(Sql.named('SELECT COUNT(*) FROM users'));
+    return (result.first[0] as num).toInt();
+  }
+
+  @override
   Future<Map<String, dynamic>?> findUserByEmail(String email) async {
     final result = await _db.execute(
       Sql.named(
