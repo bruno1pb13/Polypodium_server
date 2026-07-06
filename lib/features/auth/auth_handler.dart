@@ -14,6 +14,11 @@ class AuthHandler {
   final IAuthRepository _repo;
   final ITokenService _tokens;
 
+  Future<Response> status(Request request) async {
+    final count = await _repo.countUsers();
+    return _json(200, {'hasUsers': count > 0});
+  }
+
   Future<Response> register(Request request) async {
     final body =
         jsonDecode(await request.readAsString()) as Map<String, dynamic>;
