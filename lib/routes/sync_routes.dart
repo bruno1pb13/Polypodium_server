@@ -7,8 +7,8 @@ import '../middleware/auth_middleware.dart';
 
 Handler buildSyncHandler(SyncHandler sync, ITokenService tokens) {
   final router = Router()
-    ..post('/push', sync.push)
-    ..get('/pull', sync.pull)
+    ..get('/changes', sync.changes)
+    ..post('/receive', sync.receive)
     ..post('/ack', sync.ack)
     ..get('/status', sync.status);
 

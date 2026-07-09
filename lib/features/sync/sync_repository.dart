@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:postgres/postgres.dart';
 
-import 'event_model.dart';
 import 'i_sync_repository.dart';
+import 'mat_change_model.dart';
 
 const _matTable = {
   'species': 'mat_species',
@@ -11,178 +11,116 @@ const _matTable = {
   'entry': 'mat_entries',
   'location': 'mat_locations',
   'soil': 'mat_soils',
+  'bed': 'mat_beds',
 };
 
-const _validEntityTypes = {'species', 'plant', 'entry', 'location', 'soil'};
-const _validOperations = {'create', 'update', 'delete'};
+const _validEntityTypes = {
+  'species',
+  'plant',
+  'entry',
+  'location',
+  'soil',
+  'bed',
+};
 
 class SyncRepository implements ISyncRepository {
   const SyncRepository(this._db);
   final Pool _db;
 
   @override
-  Future<({List<int> accepted, List<ConflictResult> conflicts})> pushEvents(
-    String userId,
-    String deviceId,
-    List<PushEvent> events,
-  ) async {
-    final accepted = <int>[];
-    final conflicts = <ConflictResult>[];
+  Future<({List<MatChange> changes, bool hasMore})> serveChanges(
+    String userId, {
+    required int since,
+    required int limit,
+  }) async {
+    final candidates = <MatChange>[];
 
-    await _db.runTx((session) async {
-      for (final event in events) {
-        if (!_validEntityTypes.contains(event.entityType) ||
-            !_validOperations.contains(event.operation)) {
-          continue;
-        }
-
-        if (event.operation == 'update') {
-          final conflict =
-              await _detectConflict(session, userId, event.entityId, event.entityType);
-          if (conflict != null) {
-            conflicts.add(ConflictResult(
-              localQueueId: event.localQueueId,
-              reason: conflict.reason,
-              serverPayload: conflict.serverPayload,
-            ));
-            continue;
-          }
-        }
-
-        final insertResult = await session.execute(
-          Sql.named('''
-            INSERT INTO sync_events
-              (device_id, user_id, entity_type, entity_id, operation, payload, client_timestamp)
-            VALUES
-              (@deviceId, @userId, @entityType, @entityId, @operation, @payload::jsonb, @clientTs)
-            RETURNING id, server_timestamp
-          '''),
-          parameters: {
-            'deviceId': deviceId,
-            'userId': userId,
-            'entityType': event.entityType,
-            'entityId': event.entityId,
-            'operation': event.operation,
-            'payload': jsonEncode(event.payload),
-            'clientTs': event.clientTimestamp,
-          },
-        );
-
-        final serverTs = insertResult.first[1] as DateTime;
-        await _applyToMaterialized(session, userId, event, serverTs);
-        accepted.add(event.localQueueId);
-      }
-    });
-
-    return (accepted: accepted, conflicts: conflicts);
-  }
-
-  Future<({String reason, Map<String, dynamic>? serverPayload})?> _detectConflict(
-    Session session,
-    String userId,
-    String entityId,
-    String entityType,
-  ) async {
-    final table = _matTable[entityType];
-    if (table == null) return null;
-
-    final matRow = await session.execute(
-      Sql.named(
-          'SELECT 1 FROM $table WHERE entity_id = @id AND user_id = @userId'),
-      parameters: {'id': entityId, 'userId': userId},
-    );
-
-    if (matRow.isNotEmpty) return null;
-
-    final lastEvent = await session.execute(
-      Sql.named('''
-        SELECT payload FROM sync_events
-        WHERE user_id = @userId AND entity_id = @entityId AND operation = 'delete'
-        ORDER BY id DESC
-        LIMIT 1
-      '''),
-      parameters: {'userId': userId, 'entityId': entityId},
-    );
-
-    if (lastEvent.isEmpty) return null;
-
-    return (
-      reason: 'entity_deleted_on_server',
-      serverPayload: _decodePayload(lastEvent.first[0]),
-    );
-  }
-
-  Future<void> _applyToMaterialized(
-    Session session,
-    String userId,
-    PushEvent event,
-    DateTime serverTs,
-  ) async {
-    final table = _matTable[event.entityType];
-    if (table == null) return;
-
-    if (event.operation == 'delete') {
-      await session.execute(
-        Sql.named(
-            'DELETE FROM $table WHERE entity_id = @id AND user_id = @userId'),
-        parameters: {'id': event.entityId, 'userId': userId},
-      );
-    } else {
-      await session.execute(
+    for (final entry in _matTable.entries) {
+      final result = await _db.execute(
         Sql.named('''
-          INSERT INTO $table (entity_id, user_id, payload, server_timestamp)
-          VALUES (@id, @userId, @payload::jsonb, @ts)
-          ON CONFLICT (entity_id) DO UPDATE
-            SET payload = EXCLUDED.payload,
-                server_timestamp = EXCLUDED.server_timestamp
-            WHERE EXCLUDED.server_timestamp >= $table.server_timestamp
+          SELECT entity_id, payload, updated_at, deleted_at, device_id, rev
+          FROM ${entry.value}
+          WHERE user_id = @userId AND rev > @since
+          ORDER BY rev
+          LIMIT @limit
         '''),
-        parameters: {
-          'id': event.entityId,
-          'userId': userId,
-          'payload': jsonEncode(event.payload),
-          'ts': serverTs,
-        },
+        parameters: {'userId': userId, 'since': since, 'limit': limit + 1},
       );
+
+      for (final row in result) {
+        candidates.add(MatChange(
+          entityType: entry.key,
+          entityId: row[0] as String,
+          payload: _decodePayload(row[1]),
+          updatedAt: row[2] as DateTime,
+          deletedAt: row[3] as DateTime?,
+          deviceId: row[4] as String,
+          rev: (row[5] as num).toInt(),
+        ));
+      }
     }
+
+    // Fetching each table's own smallest `limit + 1` revs is sufficient to
+    // compute the true global top-`limit` across all tables (standard
+    // k-way-merge property), and the "+1" doubles as a cheap hasMore probe
+    // without an extra COUNT query.
+    candidates.sort((a, b) => a.rev.compareTo(b.rev));
+    final hasMore = candidates.length > limit;
+    final changes =
+        hasMore ? candidates.sublist(0, limit) : candidates;
+
+    return (changes: changes, hasMore: hasMore);
   }
 
   @override
-  Future<List<SyncEvent>> pullEvents(
+  Future<int> receiveChanges(
     String userId,
     String deviceId,
-    int since,
-    int limit,
+    List<MatChange> changes,
   ) async {
-    final result = await _db.execute(
-      Sql.named('''
-        SELECT id, device_id, entity_type, entity_id, operation, payload, server_timestamp
-        FROM sync_events
-        WHERE user_id = @userId
-          AND id > @since
-          AND device_id != @deviceId
-        ORDER BY id
-        LIMIT @limit
-      '''),
-      parameters: {
-        'userId': userId,
-        'since': since,
-        'deviceId': deviceId,
-        'limit': limit,
-      },
-    );
+    var applied = 0;
 
-    return result
-        .map((row) => SyncEvent(
-              id: (row[0] as int),
-              deviceId: row[1] as String,
-              entityType: row[2] as String,
-              entityId: row[3] as String,
-              operation: row[4] as String,
-              payload: _decodePayload(row[5]),
-              serverTimestamp: row[6] as DateTime,
-            ))
-        .toList();
+    await _db.runTx((session) async {
+      for (final change in changes) {
+        if (!_validEntityTypes.contains(change.entityType)) continue;
+        final table = _matTable[change.entityType]!;
+
+        final result = await session.execute(
+          Sql.named('''
+            INSERT INTO $table
+              (entity_id, user_id, payload, updated_at, deleted_at, device_id, rev)
+            VALUES
+              (@entityId, @userId, @payload::jsonb, @updatedAt, @deletedAt, @deviceId, nextval('mat_rev_seq'))
+            ON CONFLICT (user_id, entity_id) DO UPDATE
+              SET payload = EXCLUDED.payload,
+                  updated_at = EXCLUDED.updated_at,
+                  deleted_at = EXCLUDED.deleted_at,
+                  device_id = EXCLUDED.device_id,
+                  rev = EXCLUDED.rev
+              -- Last-write-wins by actual edit time, not arrival order.
+              -- Must stay term-for-term identical to the comparator in
+              -- Polypodium/lib/core/sync/lww_merge.dart (client side) --
+              -- there's no shared package enforcing this, so a drift here
+              -- would make the two sides converge to different winners.
+              WHERE EXCLUDED.updated_at > $table.updated_at
+                 OR (EXCLUDED.updated_at = $table.updated_at
+                     AND EXCLUDED.device_id > $table.device_id)
+          '''),
+          parameters: {
+            'entityId': change.entityId,
+            'userId': userId,
+            'payload': jsonEncode(change.payload),
+            'updatedAt': change.updatedAt,
+            'deletedAt': change.deletedAt,
+            'deviceId': change.deviceId,
+          },
+        );
+
+        if (result.affectedRows > 0) applied++;
+      }
+    });
+
+    return applied;
   }
 
   @override
@@ -207,34 +145,36 @@ class SyncRepository implements ISyncRepository {
           'SELECT last_pulled_cursor FROM device_cursors WHERE device_id = @id'),
       parameters: {'id': deviceId},
     );
-    final lastPulled =
-        cursorRow.isNotEmpty ? (cursorRow.first[0] as int) : 0;
+    final lastPulled = cursorRow.isNotEmpty ? (cursorRow.first[0] as int) : 0;
 
-    final latestRow = await _db.execute(
-      Sql.named(
-          'SELECT COALESCE(MAX(id), 0) FROM sync_events WHERE user_id = @userId'),
-      parameters: {'userId': userId},
-    );
-    final serverLatest = (latestRow.first[0] as num).toInt();
+    var serverLatest = 0;
+    var pending = 0;
 
-    final countRow = await _db.execute(
-      Sql.named('''
-        SELECT COUNT(*)
-        FROM sync_events
-        WHERE user_id = @userId
-          AND id > @cursor
-          AND device_id != @deviceId
-      '''),
-      parameters: {
-        'userId': userId,
-        'cursor': lastPulled,
-        'deviceId': deviceId,
-      },
-    );
-    final pending = (countRow.first[0] as num).toInt();
+    for (final table in _matTable.values) {
+      final latestRow = await _db.execute(
+        Sql.named(
+            'SELECT COALESCE(MAX(rev), 0) FROM $table WHERE user_id = @userId'),
+        parameters: {'userId': userId},
+      );
+      final tableLatest = (latestRow.first[0] as num).toInt();
+      if (tableLatest > serverLatest) serverLatest = tableLatest;
+
+      final countRow = await _db.execute(
+        Sql.named('''
+          SELECT COUNT(*) FROM $table
+          WHERE user_id = @userId AND rev > @cursor AND device_id != @deviceId
+        '''),
+        parameters: {
+          'userId': userId,
+          'cursor': lastPulled,
+          'deviceId': deviceId,
+        },
+      );
+      pending += (countRow.first[0] as num).toInt();
+    }
 
     return {
-      'pendingEventCount': pending,
+      'pendingChangeCount': pending,
       'lastPulledCursor': lastPulled,
       'serverLatestCursor': serverLatest,
     };
