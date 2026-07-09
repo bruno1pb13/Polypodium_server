@@ -45,28 +45,11 @@ Future<void> _runMigrations(Pool pool) async {
     )
   '''));
 
-  await pool.execute(Sql('''
-    CREATE TABLE IF NOT EXISTS sync_events (
-      id               BIGSERIAL PRIMARY KEY,
-      device_id        TEXT NOT NULL REFERENCES devices(id),
-      user_id          TEXT NOT NULL REFERENCES users(id),
-      entity_type      TEXT NOT NULL,
-      entity_id        TEXT NOT NULL,
-      operation        TEXT NOT NULL,
-      payload          JSONB NOT NULL,
-      client_timestamp TIMESTAMPTZ NOT NULL,
-      server_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  '''));
-
-  await pool.execute(
-      Sql('CREATE INDEX IF NOT EXISTS idx_sync_events_user_id ON sync_events(user_id)'));
-  await pool.execute(
-      Sql('CREATE INDEX IF NOT EXISTS idx_sync_events_cursor ON sync_events(id)'));
-  await pool.execute(Sql('''
-    CREATE INDEX IF NOT EXISTS idx_sync_events_entity
-      ON sync_events(user_id, entity_id, id DESC)
-  '''));
+  // sync_events (append-only event log) is gone: sync moved from a
+  // push/pull event log to pull+ack over versioned mat_* rows. Drops any
+  // pre-existing table from before the rewrite (no production data to
+  // preserve).
+  await pool.execute(Sql('DROP TABLE IF EXISTS sync_events'));
 
   await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS device_cursors (
@@ -75,20 +58,42 @@ Future<void> _runMigrations(Pool pool) async {
     )
   '''));
 
+  // Single sequence shared by every mat_* table so `rev` stays one
+  // monotonic stream across entity types (mirrors the ordering guarantee
+  // the old global sync_events.id sequence gave for free), which keeps
+  // FK-dependency order (species -> soils -> locations -> plants -> entries)
+  // intact when a peer replays changes.
+  await pool.execute(Sql('CREATE SEQUENCE IF NOT EXISTS mat_rev_seq'));
+
   for (final table in [
     'mat_species',
     'mat_plants',
     'mat_entries',
     'mat_locations',
     'mat_soils',
+    'mat_beds',
   ]) {
+    // Pre-rewrite mat_* tables (entity_id-only PK, no rev/updated_at) are
+    // dropped and recreated: no production data to preserve, and the PK
+    // itself is changing shape (see comment below).
+    await pool.execute(Sql('DROP TABLE IF EXISTS $table'));
     await pool.execute(Sql('''
-      CREATE TABLE IF NOT EXISTS $table (
-        entity_id        TEXT PRIMARY KEY,
-        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        payload          JSONB NOT NULL,
-        server_timestamp TIMESTAMPTZ NOT NULL
+      CREATE TABLE $table (
+        entity_id  TEXT NOT NULL,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        payload    JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        deleted_at TIMESTAMPTZ NULL,
+        device_id  TEXT NOT NULL,
+        rev        BIGINT NOT NULL DEFAULT nextval('mat_rev_seq'),
+        -- Composite PK (not just entity_id): a client-generated UUID
+        -- colliding across two different users would otherwise let one
+        -- user's write silently overwrite another's, since entity_id alone
+        -- was both the old PK and the old ON CONFLICT target.
+        PRIMARY KEY (user_id, entity_id)
       )
     '''));
+    await pool.execute(
+        Sql('CREATE INDEX IF NOT EXISTS idx_${table}_rev ON $table(user_id, rev)'));
   }
 }
