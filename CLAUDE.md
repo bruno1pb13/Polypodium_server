@@ -32,7 +32,7 @@ Copy `.env.example` to `.env` and fill in the values. Required vars:
 
 ## Architecture
 
-The server is an **event-log sync backend** for the Polypodium Flutter app. It never reassigns client IDs — all UUIDs are generated on the device.
+The server is a **pull/ack sync backend** for the Polypodium Flutter app: it behaves as just another sync peer, only a public/always-reachable one (JWT + multi-tenant `user_id` scoping instead of LAN pairing). It never reassigns client IDs — all UUIDs are generated on the device.
 
 ### Request flow
 
@@ -50,21 +50,22 @@ shelf Pipeline
 
 `db.dart` holds a single global `Pool` initialised by `initDatabase()` (called once in `main`). Migrations run automatically on startup via `_runMigrations()` — all DDL uses `CREATE TABLE IF NOT EXISTS`.
 
-Two logical layers:
+There is no event log — sync is driven directly off versioned rows:
 
-1. **`sync_events`** — append-only log; never deleted. Each push inserts one row per event. Pull queries read from this table (`id > since AND device_id != myDevice`).
+**`mat_*` tables** (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`, `mat_beds`) hold the materialised current state, one row per `(user_id, entity_id)` (composite PK — a colliding client-generated UUID across two users must never let one overwrite the other's row). Each row carries `updated_at` (real edit time), `deleted_at` (soft-delete tombstone — deletes are never physical), `device_id` (last writer), and `rev` (assigned from the single shared `mat_rev_seq` sequence on every insert/update/soft-delete, so ordering stays one monotonic stream across every entity type, the same guarantee the old `sync_events.id` sequence gave for free).
 
-2. **`mat_*` tables** (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`) — materialised current state, updated on every push using Last-Write-Wins: `ON CONFLICT … DO UPDATE WHERE EXCLUDED.server_timestamp >= table.server_timestamp`. Delete events remove the row.
+- `SyncRepository.serveChanges(userId, since, limit)` — reads `rev > since` across all `mat_*` tables and merge-sorts by `rev` (`GET /sync/changes`).
+- `SyncRepository.receiveChanges(userId, deviceId, changes)` — applies a batch via `INSERT ... ON CONFLICT (user_id, entity_id) DO UPDATE ... WHERE EXCLUDED.updated_at > table.updated_at OR (EXCLUDED.updated_at = table.updated_at AND EXCLUDED.device_id > table.device_id)` (`POST /sync/receive`). This LWW comparator **must stay term-for-term identical** to `Polypodium/lib/core/sync/lww_merge.dart` on the client — there's no shared package enforcing that, only mirrored logic.
 
-`device_cursors` tracks the highest `sync_events.id` each device has acknowledged.
+`device_cursors` tracks the highest `rev` each device has acknowledged pulling (`POST /sync/ack`) — purely informational bookkeeping for `/sync/status` now, not required for correctness (a device's own local cursor state is what actually drives its next pull).
 
 ### JSONB handling
 
 PostgreSQL JSONB is inserted as a plain string with a `::jsonb` cast in the SQL (`@payload::jsonb`, parameter = `jsonEncode(map)`). When read back, results go through `_decodePayload(raw)` which accepts both `Map` (binary protocol) and `String` (text protocol), making the code robust across postgres driver versions.
 
-### Conflict detection
+### Conflict handling
 
-Only checked for `update` operations. If the entity is absent from the `mat_*` table but a `delete` event exists in `sync_events` for that `entity_id`, the push response marks it as `entity_deleted_on_server` and returns the last known payload. The event is **not** written to the log.
+There is no explicit conflict detection/UI — merges are always resolved deterministically by last-write-wins (see comparator above). An older incoming write silently no-ops rather than erroring; the caller's own cursor still advances since delivery succeeded at the transport level regardless of the merge outcome.
 
 ### Adding a new entity type
 
