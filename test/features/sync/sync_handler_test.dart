@@ -4,8 +4,8 @@ import 'package:mocktail/mocktail.dart';
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
-import 'package:polypodium_server/features/sync/event_model.dart';
 import 'package:polypodium_server/features/sync/i_sync_repository.dart';
+import 'package:polypodium_server/features/sync/mat_change_model.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 
 class _MockSyncRepo extends Mock implements ISyncRepository {}
@@ -22,41 +22,42 @@ void main() {
   Request _withContext(Request req) =>
       req.change(context: {'userId': 'user1', 'deviceId': 'device1'});
 
-  group('pull', () {
-    test('returns events and correct cursor', () async {
-      final events = [
-        SyncEvent(
-          id: 5,
-          deviceId: 'other-device',
+  group('changes', () {
+    test('returns changes and correct cursor', () async {
+      final changes = [
+        MatChange(
           entityType: 'plant',
           entityId: 'p1',
-          operation: 'create',
           payload: {'name': 'Fern'},
-          serverTimestamp: DateTime.utc(2025),
+          updatedAt: DateTime.utc(2025),
+          deviceId: 'other-device',
+          rev: 5,
         ),
       ];
-      when(() => repo.pullEvents(any(), any(), any(), any()))
-          .thenAnswer((_) async => events);
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'), limit: any(named: 'limit')))
+          .thenAnswer((_) async => (changes: changes, hasMore: false));
 
       final req = _withContext(
-          Request('GET', Uri.parse('http://localhost/pull?since=0')));
-      final res = await handler.pull(req);
+          Request('GET', Uri.parse('http://localhost/changes?since=0')));
+      final res = await handler.changes(req);
 
       expect(res.statusCode, 200);
       final body =
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
-      expect((body['events'] as List).length, 1);
+      expect((body['changes'] as List).length, 1);
       expect(body['nextCursor'], 5);
       expect(body['hasMore'], false);
     });
 
-    test('nextCursor equals since when no events', () async {
-      when(() => repo.pullEvents(any(), any(), any(), any()))
-          .thenAnswer((_) async => []);
+    test('nextCursor equals since when no changes', () async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'), limit: any(named: 'limit')))
+          .thenAnswer((_) async => (changes: <MatChange>[], hasMore: false));
 
       final req = _withContext(
-          Request('GET', Uri.parse('http://localhost/pull?since=42')));
-      final res = await handler.pull(req);
+          Request('GET', Uri.parse('http://localhost/changes?since=42')));
+      final res = await handler.changes(req);
       final body =
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['nextCursor'], 42);
@@ -95,69 +96,71 @@ void main() {
     });
   });
 
-  group('push', () {
+  group('receive', () {
     test('403 when deviceId mismatches JWT', () async {
       final req = _withContext(
-        Request('POST', Uri.parse('http://localhost/push'),
-            body: jsonEncode({'deviceId': 'wrong', 'events': []})),
+        Request('POST', Uri.parse('http://localhost/receive'),
+            body: jsonEncode({'deviceId': 'wrong', 'changes': []})),
       );
-      final res = await handler.push(req);
+      final res = await handler.receive(req);
       expect(res.statusCode, 403);
     });
 
-    test('400 when more than 500 events', () async {
-      final events = List.generate(
+    test('400 when more than 500 changes', () async {
+      final changes = List.generate(
         501,
         (i) => {
-          'localQueueId': i,
           'entityType': 'plant',
           'entityId': 'p$i',
-          'operation': 'create',
           'payload': <String, dynamic>{},
-          'clientTimestamp': DateTime.now().toIso8601String(),
+          'updatedAt': DateTime.now().toIso8601String(),
+          'deletedAt': null,
+          'deviceId': 'device1',
+          'rev': i,
         },
       );
       final req = _withContext(
-        Request('POST', Uri.parse('http://localhost/push'),
-            body: jsonEncode({'deviceId': 'device1', 'events': events})),
+        Request('POST', Uri.parse('http://localhost/receive'),
+            body: jsonEncode({'deviceId': 'device1', 'changes': changes})),
       );
-      final res = await handler.push(req);
+      final res = await handler.receive(req);
       expect(res.statusCode, 400);
     });
 
-    test('200 with accepted list on success', () async {
-      when(() => repo.pushEvents(any(), any(), any())).thenAnswer(
-          (_) async => (accepted: [0, 1], conflicts: <ConflictResult>[]));
+    test('200 with appliedCount on success', () async {
+      when(() => repo.receiveChanges(any(), any(), any()))
+          .thenAnswer((_) async => 2);
 
-      final events = [
+      final changes = [
         {
-          'localQueueId': 0,
           'entityType': 'plant',
           'entityId': 'p1',
-          'operation': 'create',
           'payload': <String, dynamic>{'name': 'Fern'},
-          'clientTimestamp': DateTime.now().toIso8601String(),
+          'updatedAt': DateTime.now().toIso8601String(),
+          'deletedAt': null,
+          'deviceId': 'device1',
+          'rev': 1,
         },
         {
-          'localQueueId': 1,
           'entityType': 'plant',
           'entityId': 'p2',
-          'operation': 'create',
           'payload': <String, dynamic>{'name': 'Moss'},
-          'clientTimestamp': DateTime.now().toIso8601String(),
+          'updatedAt': DateTime.now().toIso8601String(),
+          'deletedAt': null,
+          'deviceId': 'device1',
+          'rev': 2,
         },
       ];
       final req = _withContext(
-        Request('POST', Uri.parse('http://localhost/push'),
-            body: jsonEncode({'deviceId': 'device1', 'events': events})),
+        Request('POST', Uri.parse('http://localhost/receive'),
+            body: jsonEncode({'deviceId': 'device1', 'changes': changes})),
       );
-      final res = await handler.push(req);
+      final res = await handler.receive(req);
 
       expect(res.statusCode, 200);
       final body =
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
-      expect(body['accepted'], [0, 1]);
-      expect(body['conflicts'], isEmpty);
+      expect(body['appliedCount'], 2);
     });
   });
 }
