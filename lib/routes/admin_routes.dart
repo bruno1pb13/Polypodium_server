@@ -11,6 +11,8 @@ Handler buildAdminHandler(
     AdminHandler admin, ITokenService tokens, IAuthRepository authRepo) {
   final adminOnly = Router()
     ..get('/status', admin.status)
+    ..get('/settings', admin.getSettings)
+    ..patch('/settings', admin.updateSettings)
     ..get('/users', admin.listUsers)
     ..post('/users', admin.createUser)
     ..patch('/users/<id>/role', admin.setRole)

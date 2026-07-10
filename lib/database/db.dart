@@ -66,6 +66,18 @@ Future<void> _runMigrations(Pool pool) async {
     )
   '''));
 
+  // Server-wide key/value configuration set by admins (e.g. whether member
+  // accounts may export/import their data from the client). Values are
+  // stored as strings; absent keys fall back to per-key defaults in
+  // SettingsRepository.
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS server_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  '''));
+
   // Single sequence shared by every mat_* table so `rev` stays one
   // monotonic stream across entity types (mirrors the ordering guarantee
   // the old global sync_events.id sequence gave for free), which keeps
