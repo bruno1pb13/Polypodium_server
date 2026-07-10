@@ -9,6 +9,7 @@ import 'package:polypodium_server/database/db.dart';
 import 'package:polypodium_server/features/admin/admin_handler.dart';
 import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
+import 'package:polypodium_server/features/admin/settings_repository.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
@@ -39,7 +40,8 @@ void main() async {
     auth: AuthHandler(authRepo, tokens),
     sync: SyncHandler(SyncRepository(pool)),
     photos: PhotoHandler(Config.photosDir),
-    admin: AdminHandler(authRepo, serverStartedAt, _serverVersion),
+    admin: AdminHandler(
+        authRepo, SettingsRepository(pool), serverStartedAt, _serverVersion),
     authRepo: authRepo,
     tokens: tokens,
   );
