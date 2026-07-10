@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:shelf/shelf.dart';
 
+import '../../core/config.dart';
+import '../../core/http_utils.dart';
 import 'i_sync_repository.dart';
 import 'mat_change_model.dart';
 
@@ -38,8 +40,7 @@ class SyncHandler {
     final userId = request.context['userId'] as String;
     final jwtDeviceId = request.context['deviceId'] as String;
 
-    final body =
-        jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final deviceId = body['deviceId'] as String?;
 
     if (deviceId == null) {
@@ -54,9 +55,14 @@ class SyncHandler {
       return _error(400, 'too many changes (max 500)');
     }
 
-    final changes = changesRaw
-        .map((c) => MatChange.fromJson(c as Map<String, dynamic>))
-        .toList();
+    final List<MatChange> changes;
+    try {
+      changes = changesRaw
+          .map((c) => MatChange.fromJson(c as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return _error(400, 'malformed change in batch');
+    }
 
     final appliedCount = await _repo.receiveChanges(userId, deviceId, changes);
 
@@ -66,8 +72,7 @@ class SyncHandler {
   Future<Response> ack(Request request) async {
     final jwtDeviceId = request.context['deviceId'] as String;
 
-    final body =
-        jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final deviceId = body['deviceId'] as String?;
     final cursor = body['cursor'];
 
@@ -77,8 +82,11 @@ class SyncHandler {
     if (deviceId != jwtDeviceId) {
       return _error(403, 'deviceId does not match token');
     }
+    if (cursor is! num) {
+      return _error(400, 'cursor must be a number');
+    }
 
-    final cursorInt = (cursor as num).toInt();
+    final cursorInt = cursor.toInt();
     await _repo.ackCursor(deviceId, cursorInt);
 
     return _json(200, {'ok': true});
