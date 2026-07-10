@@ -6,6 +6,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:polypodium_server/core/config.dart';
 import 'package:polypodium_server/core/token_service.dart';
 import 'package:polypodium_server/database/db.dart';
+import 'package:polypodium_server/features/admin/admin_handler.dart';
 import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
@@ -16,6 +17,8 @@ import 'package:polypodium_server/middleware/error_middleware.dart';
 import 'package:polypodium_server/routes/router.dart';
 import 'package:polypodium_server/server/ssl.dart';
 
+const _serverVersion = '1.0.0';
+
 void main() async {
   final pool = await initDatabase();
   print('Database connected and migrations applied.');
@@ -24,10 +27,14 @@ void main() async {
   if (!photosDir.existsSync()) await photosDir.create(recursive: true);
 
   final tokens = JwtTokenService(Config.jwtSecret);
+  final authRepo = AuthRepository(pool);
+  final serverStartedAt = DateTime.now();
   final router = buildRouter(
-    auth: AuthHandler(AuthRepository(pool), tokens),
+    auth: AuthHandler(authRepo, tokens),
     sync: SyncHandler(SyncRepository(pool)),
     photos: PhotoHandler(Config.photosDir),
+    admin: AdminHandler(authRepo, serverStartedAt, _serverVersion),
+    authRepo: authRepo,
     tokens: tokens,
   );
 
