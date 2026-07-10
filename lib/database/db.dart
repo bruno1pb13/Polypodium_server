@@ -35,6 +35,14 @@ Future<void> _runMigrations(Pool pool) async {
     )
   '''));
 
+  // role: server-wide admin vs. regular member (distinct from any future
+  // per-workspace concept). disabled: soft-removal — blocks login while
+  // preserving the account's data.
+  await pool.execute(
+      Sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'"));
+  await pool.execute(Sql(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE'));
+
   await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS devices (
       id           TEXT PRIMARY KEY,

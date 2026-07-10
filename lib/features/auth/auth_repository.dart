@@ -12,10 +12,17 @@ class AuthRepository implements IAuthRepository {
   }
 
   @override
+  Future<int> countActiveAdmins() async {
+    final result = await _db.execute(Sql.named(
+        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = FALSE"));
+    return (result.first[0] as num).toInt();
+  }
+
+  @override
   Future<Map<String, dynamic>?> findUserByEmail(String email) async {
     final result = await _db.execute(
       Sql.named(
-          'SELECT id, email, password_hash FROM users WHERE email = @email'),
+          'SELECT id, email, password_hash, role, disabled FROM users WHERE email = @email'),
       parameters: {'email': email},
     );
     if (result.isEmpty) return null;
@@ -24,18 +31,65 @@ class AuthRepository implements IAuthRepository {
       'id': row[0] as String,
       'email': row[1] as String,
       'passwordHash': row[2] as String,
+      'role': row[3] as String,
+      'disabled': row[4] as bool,
     };
   }
 
   @override
   Future<Map<String, dynamic>> createUser(
-      String id, String email, String passwordHash) async {
+      String id, String email, String passwordHash, String role) async {
     await _db.execute(
-      Sql.named(
-          'INSERT INTO users (id, email, password_hash) VALUES (@id, @email, @hash)'),
-      parameters: {'id': id, 'email': email, 'hash': passwordHash},
+      Sql.named('''
+        INSERT INTO users (id, email, password_hash, role)
+        VALUES (@id, @email, @hash, @role)
+      '''),
+      parameters: {'id': id, 'email': email, 'hash': passwordHash, 'role': role},
     );
-    return {'id': id, 'email': email};
+    return {'id': id, 'email': email, 'role': role};
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getAuthInfo(String userId) async {
+    final result = await _db.execute(
+      Sql.named('SELECT role, disabled FROM users WHERE id = @id'),
+      parameters: {'id': userId},
+    );
+    if (result.isEmpty) return null;
+    final row = result.first;
+    return {'role': row[0] as String, 'disabled': row[1] as bool};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listUsers() async {
+    final result = await _db.execute(Sql.named(
+        'SELECT id, email, role, disabled, created_at FROM users ORDER BY created_at'));
+    return [
+      for (final row in result)
+        {
+          'id': row[0] as String,
+          'email': row[1] as String,
+          'role': row[2] as String,
+          'disabled': row[3] as bool,
+          'createdAt': (row[4] as DateTime).toIso8601String(),
+        }
+    ];
+  }
+
+  @override
+  Future<void> setRole(String userId, String role) async {
+    await _db.execute(
+      Sql.named('UPDATE users SET role = @role WHERE id = @id'),
+      parameters: {'id': userId, 'role': role},
+    );
+  }
+
+  @override
+  Future<void> setDisabled(String userId, bool disabled) async {
+    await _db.execute(
+      Sql.named('UPDATE users SET disabled = @disabled WHERE id = @id'),
+      parameters: {'id': userId, 'disabled': disabled},
+    );
   }
 
   @override
