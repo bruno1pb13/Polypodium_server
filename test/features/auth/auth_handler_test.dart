@@ -60,9 +60,9 @@ void main() {
       expect(res.statusCode, 400);
     });
 
-    test('400 when password is shorter than 6 chars', () async {
+    test('400 when password is shorter than 8 chars', () async {
       final res = await handler.register(
-          _post('/register', {'email': 'a@b.com', 'password': '123'}));
+          _post('/register', {'email': 'a@b.com', 'password': '1234567'}));
       expect(res.statusCode, 400);
     });
 
@@ -75,21 +75,20 @@ void main() {
       expect(res.statusCode, 403);
     });
 
-    test('409 when email already registered', () async {
+    test('403 when another request won the bootstrap race', () async {
       when(() => repo.countUsers()).thenAnswer((_) async => 0);
-      when(() => repo.findUserByEmail('a@b.com')).thenAnswer(
-          (_) async => {'id': 'uid', 'email': 'a@b.com', 'passwordHash': 'h'});
+      when(() => repo.createFirstAdmin(any(), any(), any()))
+          .thenAnswer((_) async => false);
 
       final res = await handler.register(
           _post('/register', {'email': 'a@b.com', 'password': 'secret123'}));
-      expect(res.statusCode, 409);
+      expect(res.statusCode, 403);
     });
 
     test('201 with token and admin role on success (first user)', () async {
       when(() => repo.countUsers()).thenAnswer((_) async => 0);
-      when(() => repo.findUserByEmail(any())).thenAnswer((_) async => null);
-      when(() => repo.createUser(any(), any(), any(), any()))
-          .thenAnswer((_) async => {});
+      when(() => repo.createFirstAdmin(any(), any(), any()))
+          .thenAnswer((_) async => true);
       when(() => repo.upsertDevice(any(), any(), any()))
           .thenAnswer((_) async {});
       when(() => tokens.sign(any(), any())).thenReturn('tok123');

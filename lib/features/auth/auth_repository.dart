@@ -50,6 +50,30 @@ class AuthRepository implements IAuthRepository {
   }
 
   @override
+  Future<bool> createFirstAdmin(
+      String id, String email, String passwordHash) async {
+    return _db.runTx<bool>((session) async {
+      // Serialize concurrent bootstrap attempts so exactly one first admin
+      // wins, even with different emails (the UNIQUE(email) constraint alone
+      // wouldn't stop two distinct-email registrations from both succeeding).
+      await session.execute(Sql.named('SELECT pg_advisory_xact_lock(918273645)'));
+
+      final count =
+          await session.execute(Sql.named('SELECT COUNT(*) FROM users'));
+      if ((count.first[0] as num).toInt() > 0) return false;
+
+      await session.execute(
+        Sql.named('''
+          INSERT INTO users (id, email, password_hash, role)
+          VALUES (@id, @email, @hash, 'admin')
+        '''),
+        parameters: {'id': id, 'email': email, 'hash': passwordHash},
+      );
+      return true;
+    });
+  }
+
+  @override
   Future<Map<String, dynamic>?> getAuthInfo(String userId) async {
     final result = await _db.execute(
       Sql.named('SELECT role, disabled FROM users WHERE id = @id'),
