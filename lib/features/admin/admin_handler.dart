@@ -4,9 +4,13 @@ import 'package:bcrypt/bcrypt.dart';
 import 'package:shelf/shelf.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/config.dart';
+import '../../core/http_utils.dart';
 import '../auth/i_auth_repository.dart';
 
 final _uuid = const Uuid();
+
+const _minPasswordLength = 8;
 
 class AdminHandler {
   const AdminHandler(this._repo, this._serverStartedAt, this._version);
@@ -40,8 +44,7 @@ class AdminHandler {
   }
 
   Future<Response> createUser(Request request) async {
-    final body =
-        jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final email = (body['email'] as String?)?.trim();
     final password = body['password'] as String?;
 
@@ -51,8 +54,8 @@ class AdminHandler {
         password.isEmpty) {
       return _error(400, 'email and password required');
     }
-    if (password.length < 6) {
-      return _error(400, 'password must be at least 6 characters');
+    if (password.length < _minPasswordLength) {
+      return _error(400, 'password must be at least $_minPasswordLength characters');
     }
 
     final existing = await _repo.findUserByEmail(email);
@@ -67,8 +70,7 @@ class AdminHandler {
   }
 
   Future<Response> setRole(Request request, String id) async {
-    final body =
-        jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final role = body['role'] as String?;
     if (role == null || (role != 'admin' && role != 'member')) {
       return _error(400, "role must be 'admin' or 'member'");
@@ -84,8 +86,7 @@ class AdminHandler {
   }
 
   Future<Response> setDisabled(Request request, String id) async {
-    final body =
-        jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final disabled = body['disabled'] as bool?;
     if (disabled == null) {
       return _error(400, 'disabled must be a boolean');

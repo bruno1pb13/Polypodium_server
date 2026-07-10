@@ -6,7 +6,9 @@ SecurityContext? buildSslContext() {
   if (Config.isDevelopment) return null;
 
   if (Config.sslCertPath == null || Config.sslKeyPath == null) {
-    print('Warning: production mode but SSL certificates not provided. Running on HTTP.');
+    // Reaching here in production is only allowed when BEHIND_PROXY=true
+    // (enforced by Config.validate() at startup): TLS terminates at the
+    // reverse proxy, so the app intentionally serves HTTP on the private link.
     return null;
   }
 

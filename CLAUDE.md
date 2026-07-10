@@ -26,9 +26,14 @@ Copy `.env.example` to `.env` and fill in the values. Required vars:
 | Var | Purpose |
 |-----|---------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | Minimum 32 chars; used for all token signing |
+| `JWT_SECRET` | Minimum 32 chars; used for all token signing. In production the server refuses to boot if this is unset, still the built-in default, or under 32 chars (`Config.validate`) |
 | `APP_ENV` | `development` disables SSL on the DB pool; any other value requires SSL |
-| `SSL_CERT_PATH` / `SSL_KEY_PATH` | Only needed when `APP_ENV != development` |
+| `SSL_CERT_PATH` / `SSL_KEY_PATH` | Serve HTTPS directly. In production you must set these **or** `BEHIND_PROXY=true`, else the server refuses to boot instead of silently serving HTTP |
+| `BEHIND_PROXY` | `true` when TLS terminates at a reverse proxy (e.g. Nginx Proxy Manager); the app serves plain HTTP behind it and trusts `X-Forwarded-For` for client IP |
+| `REGISTRATION_TOKEN` | Optional. When set, the bootstrap admin self-registration requires a matching `registrationToken` in the request body |
+| `ALLOWED_ORIGINS` | CORS: `*` or a comma-separated allowlist (only listed origins are echoed back) |
+| `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW` | Optional brute-force limits on `/api/v1/auth/*` (default 20 req / 300 s per IP) |
+| `MAX_JSON_BODY_BYTES` / `MAX_PHOTO_BYTES` | Optional request-body caps (default 1 MB / 15 MB) |
 
 ## Architecture
 
@@ -44,7 +49,7 @@ shelf Pipeline
     GET /health
 ```
 
-`authMiddleware` verifies the JWT Bearer token and injects `userId` and `deviceId` into `request.context`. Every sync handler reads these from context — never from the request body (the `deviceId` in the body is validated to match the one in the token).
+`authMiddleware` verifies the JWT Bearer token, **re-checks the account in the DB on every request** (rejecting deleted or `disabled` users so a token can't outlive a disable/delete), and injects `userId`, `deviceId`, and `role` into `request.context`. `adminOnlyMiddleware` reads `role` from context (no second query). Every sync handler reads `userId`/`deviceId` from context — never from the request body (the `deviceId` in the body is validated to match the one in the token).
 
 ### Database layout
 
