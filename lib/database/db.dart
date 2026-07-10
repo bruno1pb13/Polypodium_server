@@ -81,12 +81,26 @@ Future<void> _runMigrations(Pool pool) async {
     'mat_soils',
     'mat_beds',
   ]) {
-    // Pre-rewrite mat_* tables (entity_id-only PK, no rev/updated_at) are
-    // dropped and recreated: no production data to preserve, and the PK
-    // itself is changing shape (see comment below).
-    await pool.execute(Sql('DROP TABLE IF EXISTS $table'));
+    // Pre-rewrite mat_* tables (entity_id-only PK, no rev/updated_at) can't
+    // be migrated in place -- the PK itself changed shape (see comment
+    // below) -- so they're dropped and recreated. The drop MUST stay gated
+    // on the old shape: an unconditional drop here would wipe every user's
+    // synced data on every server restart, since migrations run on boot.
+    final legacyShape = await pool.execute(Sql('''
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = current_schema() AND table_name = '$table'
+      ) AND NOT EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = '$table' AND column_name = 'rev'
+      )
+    '''));
+    if (legacyShape.first[0] as bool) {
+      await pool.execute(Sql('DROP TABLE $table'));
+    }
     await pool.execute(Sql('''
-      CREATE TABLE $table (
+      CREATE TABLE IF NOT EXISTS $table (
         entity_id  TEXT NOT NULL,
         user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         payload    JSONB NOT NULL,
