@@ -32,6 +32,15 @@ class AuthHandler {
       return _error(400, 'password must be at least 6 characters');
     }
 
+    // Public self-registration only exists to bootstrap the very first
+    // account on a fresh server (which becomes admin). Every account after
+    // that must be created by an admin via /api/v1/admin/users.
+    final userCount = await _repo.countUsers();
+    if (userCount > 0) {
+      return _error(
+          403, 'registration is closed, ask a server admin to create your account');
+    }
+
     final existing = await _repo.findUserByEmail(email);
     if (existing != null) {
       return _error(409, 'email already registered');
@@ -41,13 +50,14 @@ class AuthHandler {
     final deviceId = _uuid.v4();
     final hash = BCrypt.hashpw(password, BCrypt.gensalt());
 
-    await _repo.createUser(userId, email, hash);
+    await _repo.createUser(userId, email, hash, 'admin');
     await _repo.upsertDevice(deviceId, userId, null);
 
     return _json(201, {
       'token': _tokens.sign(userId, deviceId),
       'userId': userId,
       'deviceId': deviceId,
+      'role': 'admin',
     });
   }
 
@@ -68,6 +78,9 @@ class AuthHandler {
         !BCrypt.checkpw(password, user['passwordHash'] as String)) {
       return _error(401, 'invalid credentials');
     }
+    if (user['disabled'] as bool) {
+      return _error(401, 'account disabled');
+    }
 
     final resolvedDeviceId = deviceId ?? _uuid.v4();
     await _repo.upsertDevice(
@@ -78,6 +91,7 @@ class AuthHandler {
       'token': _tokens.sign(user['id'] as String, resolvedDeviceId),
       'userId': user['id'],
       'deviceId': resolvedDeviceId,
+      'role': user['role'],
     });
   }
 }
