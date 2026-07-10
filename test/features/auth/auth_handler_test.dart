@@ -66,7 +66,17 @@ void main() {
       expect(res.statusCode, 400);
     });
 
+    test('403 when the server already has a user (registration closed)',
+        () async {
+      when(() => repo.countUsers()).thenAnswer((_) async => 1);
+
+      final res = await handler.register(
+          _post('/register', {'email': 'a@b.com', 'password': 'secret123'}));
+      expect(res.statusCode, 403);
+    });
+
     test('409 when email already registered', () async {
+      when(() => repo.countUsers()).thenAnswer((_) async => 0);
       when(() => repo.findUserByEmail('a@b.com')).thenAnswer(
           (_) async => {'id': 'uid', 'email': 'a@b.com', 'passwordHash': 'h'});
 
@@ -75,9 +85,10 @@ void main() {
       expect(res.statusCode, 409);
     });
 
-    test('201 with token on success', () async {
+    test('201 with token and admin role on success (first user)', () async {
+      when(() => repo.countUsers()).thenAnswer((_) async => 0);
       when(() => repo.findUserByEmail(any())).thenAnswer((_) async => null);
-      when(() => repo.createUser(any(), any(), any()))
+      when(() => repo.createUser(any(), any(), any(), any()))
           .thenAnswer((_) async => {});
       when(() => repo.upsertDevice(any(), any(), any()))
           .thenAnswer((_) async {});
@@ -92,6 +103,7 @@ void main() {
       expect(body['token'], 'tok123');
       expect(body['userId'], isA<String>());
       expect(body['deviceId'], isA<String>());
+      expect(body['role'], 'admin');
     });
   });
 
