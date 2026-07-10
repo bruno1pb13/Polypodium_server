@@ -173,3 +173,7 @@ O pull loop repete enquanto `hasMore = true`. Ao final, o cursor local é persis
 ### Status (`GET /api/v1/sync/status`)
 
 Retorna `pendingEventCount` (eventos no servidor ainda não puxados pelo dispositivo), `lastPulledCursor` e `serverLatestCursor`.
+
+## Licença
+
+Este projeto é distribuído sob a [licença MIT](LICENSE).
