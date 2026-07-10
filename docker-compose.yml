@@ -26,6 +26,10 @@ services:
       APP_ENV: ${APP_ENV:-production}
       DB_SSL: ${DB_SSL:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      # TLS terminates at the reverse proxy by default; set BEHIND_PROXY=false
+      # and provide SSL_CERT_PATH/SSL_KEY_PATH to serve HTTPS directly instead.
+      BEHIND_PROXY: ${BEHIND_PROXY:-true}
+      REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:-}
       PHOTOS_DIR: /photos
     volumes:
       - photos_data:/photos

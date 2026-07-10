@@ -20,6 +20,12 @@ import 'package:polypodium_server/server/ssl.dart';
 const _serverVersion = '1.0.0';
 
 void main() async {
+  final configError = Config.validate();
+  if (configError != null) {
+    stderr.writeln('FATAL: refusing to start — $configError');
+    exit(78); // EX_CONFIG
+  }
+
   final pool = await initDatabase();
   print('Database connected and migrations applied.');
 
@@ -55,4 +61,7 @@ void main() async {
 
   final scheme = context != null ? 'https' : 'http';
   print('Polypodium server listening on $scheme://0.0.0.0:${server.port}');
+  if (context == null && Config.behindProxy) {
+    print('Serving plain HTTP; TLS is expected to terminate at the reverse proxy.');
+  }
 }

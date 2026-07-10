@@ -23,11 +23,11 @@ Handler buildAdminHandler(
     ..mount(
       '/',
       Pipeline()
-          .addMiddleware(adminOnlyMiddleware(authRepo))
+          .addMiddleware(adminOnlyMiddleware())
           .addHandler(adminOnly.call),
     );
 
   return Pipeline()
-      .addMiddleware(authMiddleware(tokens))
+      .addMiddleware(authMiddleware(tokens, authRepo))
       .addHandler(router.call);
 }
