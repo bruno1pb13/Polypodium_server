@@ -92,6 +92,7 @@ Future<void> _runMigrations(Pool pool) async {
     'mat_locations',
     'mat_soils',
     'mat_beds',
+    'mat_defensivos',
   ]) {
     // Pre-rewrite mat_* tables (entity_id-only PK, no rev/updated_at) can't
     // be migrated in place -- the PK itself changed shape (see comment

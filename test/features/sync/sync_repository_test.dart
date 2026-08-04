@@ -149,5 +149,39 @@ void main() {
       expect(aResult.changes.single.payload['name'], 'user-a-plant');
       expect(bResult.changes.single.payload['name'], 'user-b-plant');
     });
+
+    test('defensivo entity type round-trips through receive/serveChanges',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      final applied = await repo.receiveChanges(userId, deviceId, [
+        MatChange(
+          entityType: 'defensivo',
+          entityId: 'd1',
+          payload: {'name': 'Calda bordalesa', 'category': 'fungicide'},
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+      expect(applied, 1);
+
+      final result = await repo.serveChanges(userId, since: 0, limit: 10);
+      final defensivo = result.changes.firstWhere((c) => c.entityId == 'd1');
+      expect(defensivo.entityType, 'defensivo');
+      expect(defensivo.payload['name'], 'Calda bordalesa');
+    });
   });
 }
