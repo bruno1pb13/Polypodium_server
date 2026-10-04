@@ -231,5 +231,48 @@ void main() {
       // The client treats a missing status as 'active'.
       expect(older.payload.containsKey('status'), isFalse);
     });
+
+    test('reminder entity type round-trips through receive/serveChanges',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      final applied = await repo.receiveChanges(userId, deviceId, [
+        MatChange(
+          entityType: 'reminder',
+          entityId: 'r1',
+          payload: {
+            'id': 'r1',
+            'plantId': 'p1',
+            'entryType': 'fertilizer',
+            'intervalDays': 30,
+            'enabled': true,
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+      expect(applied, 1);
+
+      final result = await repo.serveChanges(userId, since: 0, limit: 10);
+      final reminder = result.changes.firstWhere((c) => c.entityId == 'r1');
+      expect(reminder.entityType, 'reminder');
+      expect(reminder.payload['entryType'], 'fertilizer');
+      expect(reminder.payload['intervalDays'], 30);
+    });
   });
 }
+

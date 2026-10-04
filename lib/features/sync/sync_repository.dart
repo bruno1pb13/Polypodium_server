@@ -13,6 +13,7 @@ const _matTable = {
   'soil': 'mat_soils',
   'bed': 'mat_beds',
   'defensivo': 'mat_defensivos',
+  'reminder': 'mat_reminders',
 };
 
 const _validEntityTypes = {
@@ -23,6 +24,7 @@ const _validEntityTypes = {
   'soil',
   'bed',
   'defensivo',
+  'reminder',
 };
 
 class SyncRepository implements ISyncRepository {

@@ -81,7 +81,7 @@ errorMiddleware → corsMiddleware → logRequests
 
 Não há log de eventos — o sync é dirigido por **linhas versionadas**:
 
-As tabelas `mat_*` (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`, `mat_beds`) guardam o estado atual, uma linha por `(user_id, entity_id)` (PK composta — um UUID gerado no cliente que colida entre dois usuários nunca pode sobrescrever a linha do outro). Cada linha carrega:
+As tabelas `mat_*` (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`, `mat_beds`, `mat_defensivos`, `mat_reminders`) guardam o estado atual, uma linha por `(user_id, entity_id)` (PK composta — um UUID gerado no cliente que colida entre dois usuários nunca pode sobrescrever a linha do outro). Cada linha carrega:
 
 - `updated_at` — hora real da edição no aparelho;
 - `deleted_at` — tombstone de soft-delete (deletes nunca são físicos);
