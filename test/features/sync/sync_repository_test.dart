@@ -292,25 +292,29 @@ void main() {
               .execute(Sql.named('DELETE FROM users WHERE id = @id'),
                   parameters: {'id': userId}));
           final entityId = 'lww-vector-$i';
+          // device_id is NOT NULL here; the package's rule compares a null
+          // deviceId as '', which Postgres also sorts before any other id.
+          final currentDeviceId = v.currentDeviceId ?? '';
+          final incomingDeviceId = v.incomingDeviceId ?? '';
 
-          await repo.receiveChanges(userId, v.currentDeviceId, [
+          await repo.receiveChanges(userId, currentDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,
               payload: {'name': 'current'},
               updatedAt: v.currentUpdatedAt,
-              deviceId: v.currentDeviceId,
+              deviceId: currentDeviceId,
               rev: 0,
             ),
           ]);
           final applied =
-              await repo.receiveChanges(userId, v.incomingDeviceId, [
+              await repo.receiveChanges(userId, incomingDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,
               payload: {'name': 'incoming'},
               updatedAt: v.incomingUpdatedAt,
-              deviceId: v.incomingDeviceId,
+              deviceId: incomingDeviceId,
               rev: 0,
             ),
           ]);
