@@ -167,6 +167,17 @@ docker compose up -d
 
 As migrações do banco rodam automaticamente na inicialização.
 
+> **Faça um backup antes de atualizar** (seção 5). Algumas versões reorganizam dados existentes ao subir — e o banco migrado não volta a funcionar com a versão anterior do servidor.
+
+### Atualizando para a versão com jardins compartilhados
+
+Esta versão passa a guardar os dados por **jardim** (para que várias contas compartilhem as mesmas plantas) em vez de por conta. Na primeira inicialização o servidor, sozinho:
+
+- cria um *jardim pessoal* para cada conta e move para ele todos os dados dela — revisões, datas e exclusões preservadas, então os aparelhos não baixam nada de novo;
+- mantém as fotos onde estão (o jardim pessoal usa o mesmo diretório da conta).
+
+Tudo roda em uma única transação: se algo falhar, o banco fica exatamente como estava e o servidor não sobe (veja `docker compose logs server`). Em bancos grandes a primeira inicialização pode levar alguns segundos a mais, pois as tabelas são reescritas. Versões antigas do app continuam funcionando sem mudança — sincronizam o jardim pessoal. **Não é possível voltar** para a versão anterior do servidor com o banco migrado; para isso, restaure o backup.
+
 ## Referência: variáveis de ambiente
 
 | Variável | Para que serve |

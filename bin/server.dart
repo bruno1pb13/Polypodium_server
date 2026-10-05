@@ -10,6 +10,8 @@ import 'package:polypodium_server/features/admin/admin_handler.dart';
 import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/admin/settings_repository.dart';
+import 'package:polypodium_server/features/gardens/garden_handler.dart';
+import 'package:polypodium_server/features/gardens/garden_repository.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
@@ -35,6 +37,7 @@ void main() async {
 
   final tokens = JwtTokenService(Config.jwtSecret);
   final authRepo = AuthRepository(pool);
+  final gardenRepo = GardenRepository(pool);
   final serverStartedAt = DateTime.now();
   final router = buildRouter(
     auth: AuthHandler(authRepo, tokens),
@@ -42,6 +45,8 @@ void main() async {
     photos: PhotoHandler(Config.photosDir),
     admin: AdminHandler(
         authRepo, SettingsRepository(pool), serverStartedAt, _serverVersion),
+    gardens: GardenHandler(gardenRepo, authRepo),
+    gardenRepo: gardenRepo,
     authRepo: authRepo,
     tokens: tokens,
   );

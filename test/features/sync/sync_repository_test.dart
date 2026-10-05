@@ -6,12 +6,17 @@
 //   DATABASE_URL=postgresql://polypodium:<pw>@localhost/polypodium dart test test/features/sync/sync_repository_test.dart
 // Skips (rather than fails) if no Postgres is reachable, so `dart test`
 // still runs clean in environments without one configured.
+import 'dart:convert';
+
 import 'package:polypodium_core/lww_vectors.dart';
 import 'package:polypodium_core/polypodium_core.dart';
 import 'package:postgres/postgres.dart';
+import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
 import 'package:polypodium_server/database/db.dart';
+import 'package:polypodium_server/features/gardens/garden_repository.dart';
+import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
 
 void main() {
@@ -38,6 +43,7 @@ void main() {
       '''),
       parameters: {'id': userId, 'email': '$userId@test.local'},
     );
+    await db.runTx((tx) => createPersonalGarden(tx, userId));
     return userId;
   }
 
@@ -71,7 +77,7 @@ void main() {
 
       // Newer edit applied first, older edit arrives second (out-of-order
       // delivery) -- the older one must lose despite arriving later.
-      final appliedNewer = await repo.receiveChanges(userId, deviceId, [
+      final appliedNewer = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p1',
@@ -81,7 +87,7 @@ void main() {
           rev: 0,
         ),
       ]);
-      final appliedOlder = await repo.receiveChanges(userId, deviceId, [
+      final appliedOlder = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p1',
@@ -100,7 +106,7 @@ void main() {
       expect(plant.payload['name'], 'v2-newer');
     });
 
-    test('composite (user_id, entity_id) PK keeps two users with the same '
+    test('composite (garden_id, entity_id) PK keeps two gardens with the same '
         'entity id apart', () async {
       final db = pool;
       if (db == null) {
@@ -123,7 +129,7 @@ void main() {
               parameters: {'id': userB}));
 
       const sharedEntityId = 'colliding-uuid';
-      await repo.receiveChanges(userA, deviceA, [
+      await repo.receiveChanges(userA, userA, deviceA, [
         SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
@@ -133,7 +139,7 @@ void main() {
           rev: 0,
         ),
       ]);
-      await repo.receiveChanges(userB, deviceB, [
+      await repo.receiveChanges(userB, userB, deviceB, [
         SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
@@ -167,7 +173,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      final applied = await repo.receiveChanges(userId, deviceId, [
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'defensivo',
           entityId: 'd1',
@@ -183,6 +189,71 @@ void main() {
       final defensivo = result.changes.firstWhere((c) => c.entityId == 'd1');
       expect(defensivo.entityType, 'defensivo');
       expect(defensivo.payload['name'], 'Calda bordalesa');
+    });
+
+    test('receive stores the known types and reports the dropped ones',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final handler = SyncHandler(SyncRepository(db));
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+      Request withContext(Request r) =>
+          r.change(context: {
+            'userId': userId,
+            'gardenId': userId,
+            'deviceId': deviceId,
+          });
+      SyncChange change(String type, String id) => SyncChange(
+            entityType: type,
+            entityId: id,
+            payload: {'id': id},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deviceId: deviceId,
+            rev: 0,
+          );
+
+      final received = await handler.receive(withContext(Request(
+          'POST', Uri.parse('http://localhost/receive'),
+          body: jsonEncode({
+            'deviceId': deviceId,
+            'changes': [
+              change('entry_photo', 'ph1'),
+              change('hologram', 'h1'),
+              change('reminder', 'r1'),
+            ].map((c) => c.toJson()).toList(),
+          }))));
+      final pushBody =
+          jsonDecode(await received.readAsString()) as Map<String, dynamic>;
+      expect(pushBody['appliedCount'], 2);
+      expect(pushBody['ignoredEntityTypes'], ['hologram']);
+
+      final pulled = await handler.changes(withContext(
+          Request('GET', Uri.parse('http://localhost/changes?since=0'))));
+      final pullBody =
+          jsonDecode(await pulled.readAsString()) as Map<String, dynamic>;
+      expect(
+          (pullBody['changes'] as List).map((c) => (c as Map)['entityId']),
+          unorderedEquals(['ph1', 'r1']));
+      expect(pullBody['supportedEntities'], [
+        'bed',
+        'defensivo',
+        'entry',
+        'entry_photo',
+        'location',
+        'plant',
+        'reminder',
+        'soil',
+        'species',
+      ]);
     });
 
     test('plant status fields pass through untouched, and are simply absent '
@@ -201,7 +272,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      await repo.receiveChanges(userId, deviceId, [
+      await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p-new',
@@ -249,7 +320,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      final applied = await repo.receiveChanges(userId, deviceId, [
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'reminder',
           entityId: 'r1',
@@ -275,6 +346,272 @@ void main() {
       expect(reminder.payload['intervalDays'], 30);
     });
 
+    test('entry_photo round-trips and reaches clients of every release',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
+        SyncChange(
+          entityType: 'entry',
+          entityId: 'e1',
+          payload: {
+            'id': 'e1',
+            'plantId': 'p1',
+            'type': 'observation',
+            'photoKey': 'e1.jpg',
+            'date': '2025-01-01T00:00:00.000',
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+        SyncChange(
+          entityType: 'entry_photo',
+          entityId: 'ph2',
+          payload: {
+            'id': 'ph2',
+            'entryId': 'e1',
+            'photoKey': 'ph2.jpg',
+            'position': 1,
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+      expect(applied, 2);
+
+      // Legacy clients (no entry types header) get it too: they ignore
+      // entity types they don't know, and keep the entry's first photo.
+      final legacy = await repo.serveChanges(userId, since: 0, limit: 10);
+      expect(legacy.changes.map((c) => (c.entityType, c.entityId)),
+          [('entry', 'e1'), ('entry_photo', 'ph2')]);
+      final photo = legacy.changes.last;
+      expect(photo.payload['entryId'], 'e1');
+      expect(photo.payload['photoKey'], 'ph2.jpg');
+      expect(photo.payload['position'], 1);
+
+      // The backfill of a client that ignored them: entry photos only.
+      final backfill = await repo.serveChanges(userId,
+          since: 0, limit: 10, entityTypes: {'entry_photo'});
+      expect(backfill.changes.map((c) => c.entityId), ['ph2']);
+    });
+
+    group('entry type filtering', () {
+      const allTypes = {...legacyEntryTypes, 'repotting'};
+
+      SyncChange entry(String id, String type, String deviceId,
+              {DateTime? deletedAt}) =>
+          SyncChange(
+            entityType: 'entry',
+            entityId: id,
+            payload: {'id': id, 'type': type},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deletedAt: deletedAt,
+            deviceId: deviceId,
+            rev: 0,
+          );
+
+      // Replays the pull loop every released client runs: the next `since`
+      // is the rev of the last change applied, and an empty page ends it.
+      Future<({List<String> ids, int cursor})> pullLikeClient(
+        SyncRepository repo,
+        String userId, {
+        required int since,
+        required int limit,
+        Set<String>? entryTypes,
+        Set<String>? entityTypes,
+      }) async {
+        final ids = <String>[];
+        for (var page = 0; page < 50; page++) {
+          final result = await repo.serveChanges(userId,
+              since: since,
+              limit: limit,
+              entryTypes: entryTypes,
+              entityTypes: entityTypes);
+          ids.addAll(result.changes.map((c) => c.entityId));
+          if (result.changes.isNotEmpty) since = result.changes.last.rev;
+          if (result.changes.isEmpty || !result.hasMore) {
+            return (ids: ids, cursor: since);
+          }
+        }
+        fail('pull did not terminate');
+      }
+
+      Future<({SyncRepository repo, String userId, String deviceId})?>
+          setUpUser() async {
+        final db = pool;
+        if (db == null) {
+          markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+          return null;
+        }
+        final userId = await _makeUser(db);
+        addTearDown(() => db
+            .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+                parameters: {'id': userId}));
+        final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+        await _makeDevice(db, userId, deviceId);
+        return (repo: SyncRepository(db), userId: userId, deviceId: deviceId);
+      }
+
+      test('a client without the header gets only legacy types, tombstones '
+          'included; a declaring client gets what it declared', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        await repo.receiveChanges(userId, userId, deviceId, [
+          entry('e-irrigation', 'irrigation', deviceId),
+          entry('e-repotting', 'repotting', deviceId),
+          entry('e-repotting-deleted', 'repotting', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+          entry('e-pesticide-deleted', 'pesticide', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+        ]);
+
+        Future<Set<String>> ids(Set<String>? entryTypes) async =>
+            (await repo.serveChanges(userId,
+                    since: 0, limit: 10, entryTypes: entryTypes))
+                .changes
+                .map((c) => c.entityId)
+                .toSet();
+
+        expect(await ids(null), {'e-irrigation', 'e-pesticide-deleted'});
+        expect(await ids(allTypes), {
+          'e-irrigation',
+          'e-repotting',
+          'e-repotting-deleted',
+          'e-pesticide-deleted',
+        });
+        expect(await ids({'repotting'}),
+            {'e-repotting', 'e-repotting-deleted'});
+      });
+
+      test('hidden rows never stall or loop the pull: a window made only of '
+          'hidden rows, and hidden rows at the tail', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        // irrigation, 5 hidden, plant, 3 hidden, irrigation, 4 hidden (tail).
+        await repo.receiveChanges(userId, userId, deviceId, [
+          entry('e1', 'irrigation', deviceId),
+          for (var i = 0; i < 5; i++) entry('r-a$i', 'repotting', deviceId),
+          SyncChange(
+            entityType: 'plant',
+            entityId: 'p1',
+            payload: {'nickname': 'Samambaia'},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deviceId: deviceId,
+            rev: 0,
+          ),
+          for (var i = 0; i < 3; i++) entry('r-b$i', 'repotting', deviceId),
+          entry('e2', 'irrigation', deviceId),
+          for (var i = 0; i < 4; i++) entry('r-c$i', 'repotting', deviceId),
+        ]);
+
+        final all = (await repo.serveChanges(userId,
+                since: 0, limit: 100, entryTypes: allTypes))
+            .changes;
+        int revOf(String id) => all.firstWhere((c) => c.entityId == id).rev;
+
+        // The next rows after e1 (by rev) are all hidden; the page still
+        // reaches past them instead of coming back empty with hasMore.
+        final afterE1 = await repo.serveChanges(userId,
+            since: revOf('e1'), limit: 3);
+        expect(afterE1.changes.map((c) => c.entityId), ['p1', 'e2']);
+        expect(afterE1.hasMore, isFalse);
+
+        // Only hidden rows remain past e2: empty page, no hasMore.
+        final tail =
+            await repo.serveChanges(userId, since: revOf('e2'), limit: 3);
+        expect(tail.changes, isEmpty);
+        expect(tail.hasMore, isFalse);
+
+        for (final limit in [1, 2, 3, 100]) {
+          final legacy =
+              await pullLikeClient(repo, userId, since: 0, limit: limit);
+          expect(legacy.ids, ['e1', 'p1', 'e2'], reason: 'limit $limit');
+          expect(legacy.cursor, revOf('e2'));
+
+          // A later sync from that cursor finds nothing new and ends.
+          final again = await pullLikeClient(repo, userId,
+              since: legacy.cursor, limit: limit);
+          expect(again.ids, isEmpty);
+
+          final declared = await pullLikeClient(repo, userId,
+              since: 0, limit: limit, entryTypes: allTypes);
+          expect(declared.ids, hasLength(15));
+          expect(declared.cursor, all.last.rev);
+        }
+      });
+
+      test('restricting to entries combines with the entry types filter, '
+          'pages included', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        SyncChange plant(String id) => SyncChange(
+              entityType: 'plant',
+              entityId: id,
+              payload: {'nickname': id},
+              updatedAt: DateTime.utc(2025, 1, 1),
+              deviceId: deviceId,
+              rev: 0,
+            );
+
+        await repo.receiveChanges(userId, userId, deviceId, [
+          entry('e1', 'irrigation', deviceId),
+          plant('p1'),
+          entry('r1', 'repotting', deviceId),
+          plant('p2'),
+          entry('e2', 'irrigation', deviceId),
+          entry('r2', 'repotting', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+          plant('p3'),
+          entry('r3', 'repotting', deviceId),
+          plant('p4'),
+        ]);
+
+        final everything = await pullLikeClient(repo, userId,
+            since: 0, limit: 100, entryTypes: allTypes);
+        expect(everything.ids, hasLength(9));
+
+        for (final limit in [1, 2, 100]) {
+          final backfill = await pullLikeClient(repo, userId,
+              since: 0,
+              limit: limit,
+              entryTypes: {'repotting'},
+              entityTypes: {'entry'});
+          expect(backfill.ids, ['r1', 'r2', 'r3'], reason: 'limit $limit');
+
+          final entries = await pullLikeClient(repo, userId,
+              since: 0, limit: limit, entityTypes: {'entry'});
+          expect(entries.ids, ['e1', 'e2'], reason: 'limit $limit');
+        }
+
+        final plantsOnly = await repo.serveChanges(userId,
+            since: 0, limit: 100, entityTypes: {'plant', 'unknown'});
+        expect(plantsOnly.changes.map((c) => c.entityId),
+            ['p1', 'p2', 'p3', 'p4']);
+      });
+    });
+
     // The ON CONFLICT clause can't call incomingWins() directly, so the
     // package's shared vectors pin the SQL to it instead.
     group('ON CONFLICT clause agrees with incomingWins on lwwVectors', () {
@@ -297,7 +634,7 @@ void main() {
           final currentDeviceId = v.currentDeviceId ?? '';
           final incomingDeviceId = v.incomingDeviceId ?? '';
 
-          await repo.receiveChanges(userId, currentDeviceId, [
+          await repo.receiveChanges(userId, userId, currentDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,
@@ -308,7 +645,7 @@ void main() {
             ),
           ]);
           final applied =
-              await repo.receiveChanges(userId, incomingDeviceId, [
+              await repo.receiveChanges(userId, userId, incomingDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,

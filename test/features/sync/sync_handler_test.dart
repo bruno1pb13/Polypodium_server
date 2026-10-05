@@ -20,7 +20,11 @@ void main() {
   });
 
   Request _withContext(Request req) =>
-      req.change(context: {'userId': 'user1', 'deviceId': 'device1'});
+      req.change(context: {
+        'userId': 'user1',
+        'gardenId': 'garden1',
+        'deviceId': 'device1',
+      });
 
   group('changes', () {
     test('returns changes and correct cursor', () async {
@@ -62,6 +66,114 @@ void main() {
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['nextCursor'], 42);
     });
+
+    test('lists every entity type the server stores, sorted', () async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'), limit: any(named: 'limit')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      final res = await handler.changes(_withContext(
+          Request('GET', Uri.parse('http://localhost/changes?since=0'))));
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['supportedEntities'], syncEntityTypes.toList()..sort());
+      expect(body['supportedEntities'],
+          containsAll(['entry_photo', 'reminder', 'defensivo']));
+    });
+  });
+
+  group('changes entry types header', () {
+    Future<Set<String>?> declaredFor(Map<String, String> headers) async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      await handler.changes(_withContext(Request(
+          'GET', Uri.parse('http://localhost/changes?since=0'),
+          headers: headers)));
+      return verify(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: captureAny(named: 'entryTypes')))
+          .captured
+          .single as Set<String>?;
+    }
+
+    test('absent header leaves the legacy default to the repository',
+        () async {
+      expect(await declaredFor({}), isNull);
+    });
+
+    test('blank header counts as absent', () async {
+      expect(await declaredFor({'X-Polypodium-Entry-Types': ' , '}), isNull);
+    });
+
+    test('declared types are trimmed into a set', () async {
+      expect(
+        await declaredFor(
+            {'X-Polypodium-Entry-Types': 'irrigation, repotting,irrigation'}),
+        {'irrigation', 'repotting'},
+      );
+    });
+  });
+
+  group('changes entities param', () {
+    Future<({Set<String>? restricted, Map<String, dynamic> body})> pull(
+        String query) async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes'),
+              entityTypes: any(named: 'entityTypes')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      final res = await handler.changes(_withContext(
+          Request('GET', Uri.parse('http://localhost/changes?$query'))));
+      final restricted = verify(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes'),
+              entityTypes: captureAny(named: 'entityTypes')))
+          .captured
+          .single as Set<String>?;
+      return (
+        restricted: restricted,
+        body: jsonDecode(await res.readAsString()) as Map<String, dynamic>,
+      );
+    }
+
+    test('absent param serves every entity and echoes nothing', () async {
+      final (:restricted, :body) = await pull('since=0');
+      expect(restricted, isNull);
+      expect(body.containsKey('entities'), isFalse);
+    });
+
+    test('blank param counts as absent', () async {
+      final (:restricted, :body) = await pull('since=0&entities=%20,');
+      expect(restricted, isNull);
+      expect(body.containsKey('entities'), isFalse);
+    });
+
+    test('restriction is passed on and echoed back', () async {
+      final (:restricted, :body) =
+          await pull('since=0&entities=plant,%20entry');
+      expect(restricted, {'entry', 'plant'});
+      expect(body['entities'], ['entry', 'plant']);
+    });
+
+    test('the echo leaves out entity types the server does not store',
+        () async {
+      final (:restricted, :body) =
+          await pull('since=0&entities=entry_photo,hologram');
+      expect(restricted, {'entry_photo', 'hologram'});
+      expect(body['entities'], ['entry_photo']);
+
+      final (restricted: _, body: unknownOnly) =
+          await pull('since=0&entities=hologram');
+      expect(unknownOnly['entities'], isEmpty);
+    });
   });
 
   group('ack', () {
@@ -75,7 +187,7 @@ void main() {
     });
 
     test('200 on success', () async {
-      when(() => repo.ackCursor(any(), any())).thenAnswer((_) async {});
+      when(() => repo.ackCursor(any(), any(), any())).thenAnswer((_) async {});
 
       final req = _withContext(
         Request('POST', Uri.parse('http://localhost/ack'),
@@ -83,7 +195,7 @@ void main() {
       );
       final res = await handler.ack(req);
       expect(res.statusCode, 200);
-      verify(() => repo.ackCursor('device1', 10)).called(1);
+      verify(() => repo.ackCursor('device1', 'garden1', 10)).called(1);
     });
 
     test('400 when cursor is missing', () async {
@@ -128,7 +240,7 @@ void main() {
     });
 
     test('200 with appliedCount on success', () async {
-      when(() => repo.receiveChanges(any(), any(), any()))
+      when(() => repo.receiveChanges(any(), any(), any(), any()))
           .thenAnswer((_) async => 2);
 
       final changes = [
@@ -161,6 +273,43 @@ void main() {
       final body =
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['appliedCount'], 2);
+      expect(body['ignoredEntityTypes'], isEmpty);
+      // The garden comes from the context (gardenMiddleware), the writer
+      // from the token.
+      verify(() => repo.receiveChanges('garden1', 'user1', 'device1', any()))
+          .called(1);
+    });
+
+    test('reports the entity types it dropped from the batch', () async {
+      when(() => repo.receiveChanges(any(), any(), any(), any()))
+          .thenAnswer((_) async => 1);
+
+      Map<String, dynamic> change(String type, String id) => {
+            'entityType': type,
+            'entityId': id,
+            'payload': <String, dynamic>{},
+            'updatedAt': DateTime.now().toIso8601String(),
+            'deletedAt': null,
+            'deviceId': 'device1',
+            'rev': 1,
+          };
+      final req = _withContext(
+        Request('POST', Uri.parse('http://localhost/receive'),
+            body: jsonEncode({
+              'deviceId': 'device1',
+              'changes': [
+                change('zeppelin', 'z1'),
+                change('plant', 'p1'),
+                change('hologram', 'h1'),
+                change('zeppelin', 'z2'),
+              ],
+            })),
+      );
+      final res = await handler.receive(req);
+
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['ignoredEntityTypes'], ['hologram', 'zeppelin']);
     });
   });
 }

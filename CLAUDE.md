@@ -37,7 +37,7 @@ Copy `.env.example` to `.env` and fill in the values. Required vars:
 
 ## Architecture
 
-The server is a **pull/ack sync backend** for the Polypodium Flutter app: it behaves as just another sync peer, only a public/always-reachable one (JWT + multi-tenant `user_id` scoping instead of LAN pairing). It never reassigns client IDs — all UUIDs are generated on the device.
+The server is a **pull/ack sync backend** for the Polypodium Flutter app: it behaves as just another sync peer, only a public/always-reachable one (JWT + per-garden scoping instead of LAN pairing: every account has a personal garden whose id equals its user id, and can share gardens with other accounts via `gardens`/`garden_members`; sync and photo routes take an optional `X-Polypodium-Garden` header, absent = personal garden). It never reassigns client IDs — all UUIDs are generated on the device.
 
 ### Request flow
 
@@ -57,10 +57,10 @@ shelf Pipeline
 
 There is no event log — sync is driven directly off versioned rows:
 
-**`mat_*` tables** (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`, `mat_beds`) hold the materialised current state, one row per `(user_id, entity_id)` (composite PK — a colliding client-generated UUID across two users must never let one overwrite the other's row). Each row carries `updated_at` (real edit time), `deleted_at` (soft-delete tombstone — deletes are never physical), `device_id` (last writer), and `rev` (assigned from the single shared `mat_rev_seq` sequence on every insert/update/soft-delete, so ordering stays one monotonic stream across every entity type, the same guarantee the old `sync_events.id` sequence gave for free).
+**`mat_*` tables** (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`, `mat_soils`, `mat_beds`) hold the materialised current state, one row per `(garden_id, entity_id)` (composite PK — a colliding client-generated UUID across two gardens must never let one overwrite the other's row; `user_id` is kept as the last account that wrote the row). Each row carries `updated_at` (real edit time), `deleted_at` (soft-delete tombstone — deletes are never physical), `device_id` (last writer), and `rev` (assigned from the single shared `mat_rev_seq` sequence on every insert/update/soft-delete, so ordering stays one monotonic stream across every entity type, the same guarantee the old `sync_events.id` sequence gave for free).
 
-- `SyncRepository.serveChanges(userId, since, limit)` — reads `rev > since` across all `mat_*` tables and merge-sorts by `rev` (`GET /sync/changes`).
-- `SyncRepository.receiveChanges(userId, deviceId, changes)` — applies a batch via `INSERT ... ON CONFLICT (user_id, entity_id) DO UPDATE ... WHERE EXCLUDED.updated_at > table.updated_at OR (EXCLUDED.updated_at = table.updated_at AND EXCLUDED.device_id > table.device_id)` (`POST /sync/receive`). This SQL comparator must match `incomingWins` from the shared `polypodium_core` package (git dependency). `test/features/sync/sync_repository_test.dart` runs the package's LWW vectors through the real `ON CONFLICT` to enforce it. The client applies the same `incomingWins` on pull (its rows store the last writer's deviceId), so both sides resolve ties identically.
+- `SyncRepository.serveChanges(...)` (scoped by garden) — reads `rev > since` across all `mat_*` tables and merge-sorts by `rev` (`GET /sync/changes`).
+- `SyncRepository.receiveChanges(...)` (scoped by garden) — applies a batch via `INSERT ... ON CONFLICT (garden_id, entity_id) DO UPDATE ... WHERE EXCLUDED.updated_at > table.updated_at OR (EXCLUDED.updated_at = table.updated_at AND EXCLUDED.device_id > table.device_id)` (`POST /sync/receive`). This SQL comparator must match `incomingWins` from the shared `polypodium_core` package (git dependency). `test/features/sync/sync_repository_test.dart` runs the package's LWW vectors through the real `ON CONFLICT` to enforce it. The client applies the same `incomingWins` on pull (its rows store the last writer's deviceId), so both sides resolve ties identically.
 
 `device_cursors` tracks the highest `rev` each device has acknowledged pulling (`POST /sync/ack`) — purely informational bookkeeping for `/sync/status` now, not required for correctness (a device's own local cursor state is what actually drives its next pull).
 

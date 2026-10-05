@@ -15,9 +15,11 @@ class PhotoHandler {
     final safeKey = _sanitizeKey(photoKey);
     if (safeKey == null) return _error(400, 'invalid photo key');
 
-    final userId = request.context['userId'] as String;
-    final userDir = Directory('$_photosDir/$userId');
-    if (!userDir.existsSync()) await userDir.create(recursive: true);
+    // A personal garden's id is its owner's user id, so photos stored per
+    // user before gardens existed are already where this looks for them.
+    final gardenId = request.context['gardenId'] as String;
+    final gardenDir = Directory('$_photosDir/$gardenId');
+    if (!gardenDir.existsSync()) await gardenDir.create(recursive: true);
 
     final List<int> bytes;
     try {
@@ -27,7 +29,7 @@ class PhotoHandler {
     }
     if (bytes.isEmpty) return _error(400, 'empty body');
 
-    await File('${userDir.path}/$safeKey').writeAsBytes(bytes);
+    await File('${gardenDir.path}/$safeKey').writeAsBytes(bytes);
     return _json(200, {'ok': true, 'photoKey': safeKey});
   }
 
@@ -35,8 +37,8 @@ class PhotoHandler {
     final safeKey = _sanitizeKey(photoKey);
     if (safeKey == null) return _error(400, 'invalid photo key');
 
-    final userId = request.context['userId'] as String;
-    final file = File('$_photosDir/$userId/$safeKey');
+    final gardenId = request.context['gardenId'] as String;
+    final file = File('$_photosDir/$gardenId/$safeKey');
     if (!file.existsSync()) return _error(404, 'photo not found');
 
     return Response.ok(
@@ -45,7 +47,7 @@ class PhotoHandler {
     );
   }
 
-  /// Returns a filename safe to join under the user's photo directory, or null
+  /// Returns a filename safe to join under the garden's photo directory, or null
   /// if the key tries to escape it. `basename` collapses any path components;
   /// requiring the result to equal the input rejects `..`, slashes, and
   /// leading-dot tricks rather than silently rewriting them.
