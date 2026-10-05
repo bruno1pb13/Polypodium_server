@@ -275,6 +275,71 @@ void main() {
       expect(reminder.payload['intervalDays'], 30);
     });
 
+    test('entry_photo round-trips and reaches clients of every release',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      final applied = await repo.receiveChanges(userId, deviceId, [
+        SyncChange(
+          entityType: 'entry',
+          entityId: 'e1',
+          payload: {
+            'id': 'e1',
+            'plantId': 'p1',
+            'type': 'observation',
+            'photoKey': 'e1.jpg',
+            'date': '2025-01-01T00:00:00.000',
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+        SyncChange(
+          entityType: 'entry_photo',
+          entityId: 'ph2',
+          payload: {
+            'id': 'ph2',
+            'entryId': 'e1',
+            'photoKey': 'ph2.jpg',
+            'position': 1,
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+      expect(applied, 2);
+
+      // Legacy clients (no entry types header) get it too: they ignore
+      // entity types they don't know, and keep the entry's first photo.
+      final legacy = await repo.serveChanges(userId, since: 0, limit: 10);
+      expect(legacy.changes.map((c) => (c.entityType, c.entityId)),
+          [('entry', 'e1'), ('entry_photo', 'ph2')]);
+      final photo = legacy.changes.last;
+      expect(photo.payload['entryId'], 'e1');
+      expect(photo.payload['photoKey'], 'ph2.jpg');
+      expect(photo.payload['position'], 1);
+
+      // The backfill of a client that ignored them: entry photos only.
+      final backfill = await repo.serveChanges(userId,
+          since: 0, limit: 10, entityTypes: {'entry_photo'});
+      expect(backfill.changes.map((c) => c.entityId), ['ph2']);
+    });
+
     group('entry type filtering', () {
       const allTypes = {...legacyEntryTypes, 'repotting'};
 

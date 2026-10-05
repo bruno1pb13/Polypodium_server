@@ -9,6 +9,7 @@ const _matTable = {
   'species': 'mat_species',
   'plant': 'mat_plants',
   'entry': 'mat_entries',
+  'entry_photo': 'mat_entry_photos',
   'location': 'mat_locations',
   'soil': 'mat_soils',
   'bed': 'mat_beds',
@@ -31,17 +32,6 @@ const legacyEntryTypes = {
   'pesticide',
   'other',
   'history',
-};
-
-const _validEntityTypes = {
-  'species',
-  'plant',
-  'entry',
-  'location',
-  'soil',
-  'bed',
-  'defensivo',
-  'reminder',
 };
 
 class SyncRepository implements ISyncRepository {
@@ -118,7 +108,7 @@ class SyncRepository implements ISyncRepository {
 
     await _db.runTx((session) async {
       for (final change in changes) {
-        if (!_validEntityTypes.contains(change.entityType)) continue;
+        if (!syncEntityTypes.contains(change.entityType)) continue;
         final table = _matTable[change.entityType]!;
 
         final result = await session.execute(

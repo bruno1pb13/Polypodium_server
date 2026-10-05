@@ -53,7 +53,9 @@ Resposta `200`: mesmo formato do register, com o `role` da conta.
 
 O modelo é de **linhas versionadas com last-write-wins** (LWW): cada entidade tem uma linha por `(user_id, entity_id)` com `updatedAt` (hora real da edição), `deletedAt` (tombstone de soft-delete — nada é apagado fisicamente) e `rev` (revisão monotônica atribuída pelo servidor a cada escrita).
 
-Tipos de entidade válidos: `species`, `plant`, `entry`, `location`, `soil`, `bed`.
+Tipos de entidade válidos: `species`, `plant`, `entry`, `entry_photo`, `location`, `soil`, `bed`, `defensivo`, `reminder`. Mudanças de outros tipos são descartadas no `receive`.
+
+`entry_photo` são as fotos de um registro depois da primeira, que continua no payload da `entry` (`photoKey`); o payload traz `entryId`, `position` e o `photoKey` do arquivo. O servidor não as filtra: versões do app até a v2.8 ignoram entidades que não conhecem e seguem mostrando só a primeira foto.
 
 Formato de uma *change* (usado em `changes` e `receive`):
 
@@ -97,9 +99,9 @@ O filtro é aplicado na própria consulta, então as linhas ocultas não entram 
 
 O parâmetro opcional `entities` (lista separada por vírgulas de `entityType`, ex.: `entities=entry`) limita o pull a essas entidades; sem ele (ou vazio), todas são enviadas, como antes. Combina com `X-Polypodium-Entry-Types` e, como ele, é aplicado na consulta, então `nextCursor`/`hasMore` continuam valendo. Nomes desconhecidos são ignorados.
 
-Quando o parâmetro é usado, a resposta o ecoa ordenado — `{ "changes": [ … ], "nextCursor": 57, "hasMore": false, "entities": ["entry"] }` — para o cliente distinguir um servidor anterior a ele, que teria ignorado a restrição e mandado tudo.
+Quando o parâmetro é usado, a resposta o ecoa ordenado — `{ "changes": [ … ], "nextCursor": 57, "hasMore": false, "entities": ["entry"] }` — para o cliente distinguir um servidor anterior a ele, que teria ignorado a restrição e mandado tudo. O eco traz só os tipos que o servidor guarda, então o cliente também sabe quais ele ainda não conhece.
 
-O app usa isso para recuperar os registros que ficaram para trás do cursor enquanto o tipo era oculto: ao passar a entender tipos novos, ele faz um pull à parte desde `since=0` com `entities=entry` e só os tipos novos no header, com cursor próprio.
+O app usa isso para recuperar os registros que ficaram para trás do cursor enquanto o tipo era oculto: ao passar a entender tipos novos, ele faz um pull à parte desde `since=0` com `entities=entry` e só os tipos novos no header, com cursor próprio. Do mesmo jeito, ao passar a aplicar uma entidade que a versão anterior ignorava (ex.: `entry_photo`), faz uma vez um pull desde `since=0` com `entities=entry_photo`.
 
 ### `POST /sync/receive`
 

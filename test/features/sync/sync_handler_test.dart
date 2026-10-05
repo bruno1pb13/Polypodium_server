@@ -144,6 +144,18 @@ void main() {
       expect(restricted, {'entry', 'plant'});
       expect(body['entities'], ['entry', 'plant']);
     });
+
+    test('the echo leaves out entity types the server does not store',
+        () async {
+      final (:restricted, :body) =
+          await pull('since=0&entities=entry_photo,hologram');
+      expect(restricted, {'entry_photo', 'hologram'});
+      expect(body['entities'], ['entry_photo']);
+
+      final (restricted: _, body: unknownOnly) =
+          await pull('since=0&entities=hologram');
+      expect(unknownOnly['entities'], isEmpty);
+    });
   });
 
   group('ack', () {

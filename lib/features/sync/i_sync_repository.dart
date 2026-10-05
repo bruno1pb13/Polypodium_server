@@ -1,5 +1,19 @@
 import 'package:polypodium_core/polypodium_core.dart';
 
+/// Entity types the server stores and serves; changes of any other type are
+/// dropped on receive.
+const syncEntityTypes = {
+  'species',
+  'plant',
+  'entry',
+  'entry_photo',
+  'location',
+  'soil',
+  'bed',
+  'defensivo',
+  'reminder',
+};
+
 abstract interface class ISyncRepository {
   /// Serves this user's changes with `rev > since`, across all entity
   /// types, merged into a single rev-ordered stream (mirrors the same

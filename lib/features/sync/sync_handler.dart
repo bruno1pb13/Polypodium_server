@@ -38,8 +38,10 @@ class SyncHandler {
       'nextCursor': nextCursor,
       'hasMore': result.hasMore,
       // Echoed so a client can tell the restriction was honored: a server
-      // predating it would have sent every entity type.
-      if (entities != null) 'entities': entities.toList()..sort(),
+      // predating it would have sent every entity type. Only the types this
+      // server stores, so a client also learns which ones it doesn't yet.
+      if (entities != null)
+        'entities': entities.intersection(syncEntityTypes).toList()..sort(),
     });
   }
 

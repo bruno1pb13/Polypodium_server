@@ -89,6 +89,7 @@ Future<void> _runMigrations(Pool pool) async {
     'mat_species',
     'mat_plants',
     'mat_entries',
+    'mat_entry_photos',
     'mat_locations',
     'mat_soils',
     'mat_beds',
