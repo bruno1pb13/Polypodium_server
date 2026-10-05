@@ -42,6 +42,9 @@ class SyncHandler {
       // server stores, so a client also learns which ones it doesn't yet.
       if (entities != null)
         'entities': entities.intersection(syncEntityTypes).toList()..sort(),
+      // Lets a client find out when an upgrade starts storing a type it
+      // pushed before, so it can send those rows again.
+      'supportedEntities': syncEntityTypes.toList()..sort(),
     });
   }
 
@@ -77,8 +80,16 @@ class SyncHandler {
     }
 
     final appliedCount = await _repo.receiveChanges(userId, deviceId, changes);
+    final ignored = {
+      for (final c in changes)
+        if (!syncEntityTypes.contains(c.entityType)) c.entityType,
+    };
 
-    return _json(200, {'appliedCount': appliedCount});
+    return _json(200, {
+      'appliedCount': appliedCount,
+      // Dropped, not stored: the client must not treat them as delivered.
+      'ignoredEntityTypes': ignored.toList()..sort(),
+    });
   }
 
   Future<Response> ack(Request request) async {

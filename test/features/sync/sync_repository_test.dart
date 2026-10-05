@@ -6,12 +6,16 @@
 //   DATABASE_URL=postgresql://polypodium:<pw>@localhost/polypodium dart test test/features/sync/sync_repository_test.dart
 // Skips (rather than fails) if no Postgres is reachable, so `dart test`
 // still runs clean in environments without one configured.
+import 'dart:convert';
+
 import 'package:polypodium_core/lww_vectors.dart';
 import 'package:polypodium_core/polypodium_core.dart';
 import 'package:postgres/postgres.dart';
+import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
 import 'package:polypodium_server/database/db.dart';
+import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
 
 void main() {
@@ -183,6 +187,67 @@ void main() {
       final defensivo = result.changes.firstWhere((c) => c.entityId == 'd1');
       expect(defensivo.entityType, 'defensivo');
       expect(defensivo.payload['name'], 'Calda bordalesa');
+    });
+
+    test('receive stores the known types and reports the dropped ones',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final handler = SyncHandler(SyncRepository(db));
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+      Request withContext(Request r) =>
+          r.change(context: {'userId': userId, 'deviceId': deviceId});
+      SyncChange change(String type, String id) => SyncChange(
+            entityType: type,
+            entityId: id,
+            payload: {'id': id},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deviceId: deviceId,
+            rev: 0,
+          );
+
+      final received = await handler.receive(withContext(Request(
+          'POST', Uri.parse('http://localhost/receive'),
+          body: jsonEncode({
+            'deviceId': deviceId,
+            'changes': [
+              change('entry_photo', 'ph1'),
+              change('hologram', 'h1'),
+              change('reminder', 'r1'),
+            ].map((c) => c.toJson()).toList(),
+          }))));
+      final pushBody =
+          jsonDecode(await received.readAsString()) as Map<String, dynamic>;
+      expect(pushBody['appliedCount'], 2);
+      expect(pushBody['ignoredEntityTypes'], ['hologram']);
+
+      final pulled = await handler.changes(withContext(
+          Request('GET', Uri.parse('http://localhost/changes?since=0'))));
+      final pullBody =
+          jsonDecode(await pulled.readAsString()) as Map<String, dynamic>;
+      expect(
+          (pullBody['changes'] as List).map((c) => (c as Map)['entityId']),
+          unorderedEquals(['ph1', 'r1']));
+      expect(pullBody['supportedEntities'], [
+        'bed',
+        'defensivo',
+        'entry',
+        'entry_photo',
+        'location',
+        'plant',
+        'reminder',
+        'soil',
+        'species',
+      ]);
     });
 
     test('plant status fields pass through untouched, and are simply absent '

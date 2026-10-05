@@ -78,10 +78,12 @@ Formato de uma *change* (usado em `changes` e `receive`):
 Pull: retorna as linhas do usuário com `rev > since`, de todos os tipos de entidade, ordenadas por `rev`. `limit` entre 1 e 1000 (padrão 100).
 
 ```json
-{ "changes": [ … ], "nextCursor": 57, "hasMore": false }
+{ "changes": [ … ], "nextCursor": 57, "hasMore": false, "supportedEntities": ["bed", "defensivo", "entry", "entry_photo", "location", "plant", "reminder", "soil", "species"] }
 ```
 
 O cliente repete enquanto `hasMore = true`, passando `nextCursor` como `since`.
+
+`supportedEntities` lista, ordenados, todos os tipos de entidade que este servidor guarda (independente de `entities`). Servidores anteriores a ele não mandam o campo. Com ele o app descobre quando uma atualização do servidor passou a guardar um tipo que antes era descartado no `receive` (veja abaixo).
 
 #### Tipos de registro (`X-Polypodium-Entry-Types`)
 
@@ -111,11 +113,13 @@ Push: o cliente envia suas mudanças locais (máximo 500 por lote). O `deviceId`
 { "deviceId": "uuid", "changes": [ … ] }
 ```
 
-Cada mudança é aplicada via LWW: uma escrita mais antiga que a linha atual simplesmente não tem efeito (sem erro). Resposta:
+Cada mudança é aplicada via LWW: uma escrita mais antiga que a linha atual simplesmente não tem efeito (sem erro). Mudanças de tipos que o servidor não guarda são descartadas, e a resposta lista esses tipos (ordenados; vazia quando não houve nenhum):
 
 ```json
-{ "appliedCount": 3 }
+{ "appliedCount": 3, "ignoredEntityTypes": ["hologram"] }
 ```
+
+Servidores anteriores a `ignoredEntityTypes` (e a `supportedEntities` no pull) descartavam esses tipos em silêncio, e o cursor de push do app já tinha passado por eles. Por isso o app guarda, por servidor, os tipos que este confirmou guardar; quando `supportedEntities` passa a incluir um tipo ainda não confirmado, ele reenvia uma vez todas as linhas locais desse tipo (vivas e tombstones, com o `updatedAt`/`deviceId` atuais — o LWW torna o reenvio idempotente). Os tipos do primeiro servidor com tabelas `mat_*` (`species`, `plant`, `entry`, `location`, `soil`, `bed`) nunca são reenviados.
 
 ### `POST /sync/ack`
 
@@ -135,6 +139,7 @@ Chave de foto é um nome de arquivo simples (sem `/` nem `..`); cada usuário te
 
 - `PUT /photos/<photoKey>` — corpo são os bytes crus da imagem (limite padrão 15 MB). Resposta: `{ "ok": true, "photoKey": "…" }`.
 - `GET /photos/<photoKey>` — devolve os bytes com o `Content-Type` inferido da extensão (jpg, png, webp, gif).
+- `HEAD /photos/<photoKey>` — `200` se a foto existe, `404` se não, sem corpo. O app usa isso no reenvio acima para não subir de novo os arquivos que já estão no servidor.
 
 ## Admin
 

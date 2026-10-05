@@ -62,6 +62,20 @@ void main() {
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['nextCursor'], 42);
     });
+
+    test('lists every entity type the server stores, sorted', () async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'), limit: any(named: 'limit')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      final res = await handler.changes(_withContext(
+          Request('GET', Uri.parse('http://localhost/changes?since=0'))));
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['supportedEntities'], syncEntityTypes.toList()..sort());
+      expect(body['supportedEntities'],
+          containsAll(['entry_photo', 'reminder', 'defensivo']));
+    });
   });
 
   group('changes entry types header', () {
@@ -255,6 +269,39 @@ void main() {
       final body =
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['appliedCount'], 2);
+      expect(body['ignoredEntityTypes'], isEmpty);
+    });
+
+    test('reports the entity types it dropped from the batch', () async {
+      when(() => repo.receiveChanges(any(), any(), any()))
+          .thenAnswer((_) async => 1);
+
+      Map<String, dynamic> change(String type, String id) => {
+            'entityType': type,
+            'entityId': id,
+            'payload': <String, dynamic>{},
+            'updatedAt': DateTime.now().toIso8601String(),
+            'deletedAt': null,
+            'deviceId': 'device1',
+            'rev': 1,
+          };
+      final req = _withContext(
+        Request('POST', Uri.parse('http://localhost/receive'),
+            body: jsonEncode({
+              'deviceId': 'device1',
+              'changes': [
+                change('zeppelin', 'z1'),
+                change('plant', 'p1'),
+                change('hologram', 'h1'),
+                change('zeppelin', 'z2'),
+              ],
+            })),
+      );
+      final res = await handler.receive(req);
+
+      final body =
+          jsonDecode(await res.readAsString()) as Map<String, dynamic>;
+      expect(body['ignoredEntityTypes'], ['hologram', 'zeppelin']);
     });
   });
 }
