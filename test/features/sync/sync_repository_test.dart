@@ -183,5 +183,96 @@ void main() {
       expect(defensivo.entityType, 'defensivo');
       expect(defensivo.payload['name'], 'Calda bordalesa');
     });
+
+    test('plant status fields pass through untouched, and are simply absent '
+        'for older clients', () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      await repo.receiveChanges(userId, deviceId, [
+        MatChange(
+          entityType: 'plant',
+          entityId: 'p-new',
+          payload: {
+            'nickname': 'Doada',
+            'status': 'donated',
+            'statusChangedAt': '2025-03-01T10:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 3, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+        MatChange(
+          entityType: 'plant',
+          entityId: 'p-old',
+          payload: {'nickname': 'Cliente antigo'},
+          updatedAt: DateTime.utc(2025, 3, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+
+      final result = await repo.serveChanges(userId, since: 0, limit: 10);
+      final newer = result.changes.firstWhere((c) => c.entityId == 'p-new');
+      final older = result.changes.firstWhere((c) => c.entityId == 'p-old');
+      expect(newer.payload['status'], 'donated');
+      expect(newer.payload['statusChangedAt'], '2025-03-01T10:00:00.000');
+      // The client treats a missing status as 'active'.
+      expect(older.payload.containsKey('status'), isFalse);
+    });
+
+    test('reminder entity type round-trips through receive/serveChanges',
+        () async {
+      final db = pool;
+      if (db == null) {
+        markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+        return;
+      }
+
+      final repo = SyncRepository(db);
+      final userId = await _makeUser(db);
+      addTearDown(() => db
+          .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+              parameters: {'id': userId}));
+      final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+      await _makeDevice(db, userId, deviceId);
+
+      final applied = await repo.receiveChanges(userId, deviceId, [
+        MatChange(
+          entityType: 'reminder',
+          entityId: 'r1',
+          payload: {
+            'id': 'r1',
+            'plantId': 'p1',
+            'entryType': 'fertilizer',
+            'intervalDays': 30,
+            'enabled': true,
+            'createdAt': '2025-01-01T00:00:00.000',
+          },
+          updatedAt: DateTime.utc(2025, 1, 1),
+          deviceId: deviceId,
+          rev: 0,
+        ),
+      ]);
+      expect(applied, 1);
+
+      final result = await repo.serveChanges(userId, since: 0, limit: 10);
+      final reminder = result.changes.firstWhere((c) => c.entityId == 'r1');
+      expect(reminder.entityType, 'reminder');
+      expect(reminder.payload['entryType'], 'fertilizer');
+      expect(reminder.payload['intervalDays'], 30);
+    });
   });
 }
+
