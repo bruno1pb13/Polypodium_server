@@ -12,8 +12,9 @@ class SyncHandler {
   const SyncHandler(this._repo);
   final ISyncRepository _repo;
 
-  /// `GET /sync/changes?since=&limit=` — a real pull: returns this user's
-  /// rows with `rev > since`, across every entity type.
+  /// `GET /sync/changes?since=&limit=&entities=` — a real pull: returns
+  /// this user's rows with `rev > since`, across every entity type unless
+  /// `entities` restricts them.
   Future<Response> changes(Request request) async {
     final userId = request.context['userId'] as String;
 
@@ -22,8 +23,13 @@ class SyncHandler {
     final limit =
         (int.tryParse(params['limit'] ?? '100') ?? 100).clamp(1, 1000);
 
+    final entities = _csvSet(params['entities']);
+
     final result = await _repo.serveChanges(userId,
-        since: since, limit: limit, entryTypes: _declaredEntryTypes(request));
+        since: since,
+        limit: limit,
+        entryTypes: _declaredEntryTypes(request),
+        entityTypes: entities);
     final nextCursor =
         result.changes.isNotEmpty ? result.changes.last.rev : since;
 
@@ -31,6 +37,9 @@ class SyncHandler {
       'changes': result.changes.map((c) => c.toJson()).toList(),
       'nextCursor': nextCursor,
       'hasMore': result.hasMore,
+      // Echoed so a client can tell the restriction was honored: a server
+      // predating it would have sent every entity type.
+      if (entities != null) 'entities': entities.toList()..sort(),
     });
   }
 
@@ -104,13 +113,18 @@ class SyncHandler {
 
 /// Entry types the client declared it can parse, or null when it sent no
 /// (or a blank) `X-Polypodium-Entry-Types` header, i.e. a legacy client.
-Set<String>? _declaredEntryTypes(Request request) {
-  final types = (request.headers['x-polypodium-entry-types'] ?? '')
+Set<String>? _declaredEntryTypes(Request request) =>
+    _csvSet(request.headers['x-polypodium-entry-types']);
+
+/// Trimmed, non-empty items of a comma-separated list, or null when there
+/// are none.
+Set<String>? _csvSet(String? csv) {
+  final items = (csv ?? '')
       .split(',')
       .map((t) => t.trim())
       .where((t) => t.isNotEmpty)
       .toSet();
-  return types.isEmpty ? null : types;
+  return items.isEmpty ? null : items;
 }
 
 Response _json(int status, Object body) => Response(

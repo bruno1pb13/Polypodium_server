@@ -71,7 +71,7 @@ Formato de uma *change* (usado em `changes` e `receive`):
 
 > O `rev` enviado pelo cliente é ignorado — o servidor sempre atribui o seu próprio na escrita.
 
-### `GET /sync/changes?since=<rev>&limit=<n>`
+### `GET /sync/changes?since=<rev>&limit=<n>[&entities=<tipos>]`
 
 Pull: retorna as linhas do usuário com `rev > since`, de todos os tipos de entidade, ordenadas por `rev`. `limit` entre 1 e 1000 (padrão 100).
 
@@ -91,7 +91,15 @@ X-Polypodium-Entry-Types: irrigation,fertilizer,pruning,observation,height,chlor
 
 O servidor só envia as `entry` (vivas ou tombstones) cujo `type` está na lista. Sem o header (ou com ele vazio), o cliente é tratado como legado e recebe apenas os 10 tipos originais: `irrigation`, `fertilizer`, `pruning`, `observation`, `height`, `chlorosis`, `pest`, `pesticide`, `other`, `history`. As demais entidades não são filtradas — clientes antigos ignoram `entityType` desconhecidos.
 
-O filtro é aplicado na própria consulta, então as linhas ocultas não entram nem na página nem no cálculo de `hasMore`: o cursor do cliente (o `rev` da última mudança aplicada, que é igual ao `nextCursor`) sempre avança, e uma janela só de linhas ocultas nunca devolve página vazia com `hasMore = true`. Em contrapartida, uma linha oculta que fique para trás do cursor não é reenviada se o cliente passar a declarar o tipo depois (ex.: ao atualizar o app) — só uma nova edição dela gera um `rev` novo.
+O filtro é aplicado na própria consulta, então as linhas ocultas não entram nem na página nem no cálculo de `hasMore`: o cursor do cliente (o `rev` da última mudança aplicada, que é igual ao `nextCursor`) sempre avança, e uma janela só de linhas ocultas nunca devolve página vazia com `hasMore = true`. Em contrapartida, uma linha oculta que fique para trás do cursor não é reenviada se o cliente passar a declarar o tipo depois (ex.: ao atualizar o app) — só uma nova edição dela gera um `rev` novo. O app recupera essas linhas com um pull à parte (veja `entities` abaixo).
+
+#### Restringir o pull a algumas entidades (`entities`)
+
+O parâmetro opcional `entities` (lista separada por vírgulas de `entityType`, ex.: `entities=entry`) limita o pull a essas entidades; sem ele (ou vazio), todas são enviadas, como antes. Combina com `X-Polypodium-Entry-Types` e, como ele, é aplicado na consulta, então `nextCursor`/`hasMore` continuam valendo. Nomes desconhecidos são ignorados.
+
+Quando o parâmetro é usado, a resposta o ecoa ordenado — `{ "changes": [ … ], "nextCursor": 57, "hasMore": false, "entities": ["entry"] }` — para o cliente distinguir um servidor anterior a ele, que teria ignorado a restrição e mandado tudo.
+
+O app usa isso para recuperar os registros que ficaram para trás do cursor enquanto o tipo era oculto: ao passar a entender tipos novos, ele faz um pull à parte desde `since=0` com `entities=entry` e só os tipos novos no header, com cursor próprio.
 
 ### `POST /sync/receive`
 

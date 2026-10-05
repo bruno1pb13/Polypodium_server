@@ -54,10 +54,12 @@ class SyncRepository implements ISyncRepository {
     required int since,
     required int limit,
     Set<String>? entryTypes,
+    Set<String>? entityTypes,
   }) async {
     final candidates = <SyncChange>[];
 
     for (final entry in _matTable.entries) {
+      if (entityTypes != null && !entityTypes.contains(entry.key)) continue;
       // Filtering inside the query (not after it) keeps hidden rows out of
       // both the page and the hasMore probe, so a client's cursor -- the rev
       // of the last change it applied -- always advances.

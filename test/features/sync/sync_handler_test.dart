@@ -101,6 +101,51 @@ void main() {
     });
   });
 
+  group('changes entities param', () {
+    Future<({Set<String>? restricted, Map<String, dynamic> body})> pull(
+        String query) async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes'),
+              entityTypes: any(named: 'entityTypes')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      final res = await handler.changes(_withContext(
+          Request('GET', Uri.parse('http://localhost/changes?$query'))));
+      final restricted = verify(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes'),
+              entityTypes: captureAny(named: 'entityTypes')))
+          .captured
+          .single as Set<String>?;
+      return (
+        restricted: restricted,
+        body: jsonDecode(await res.readAsString()) as Map<String, dynamic>,
+      );
+    }
+
+    test('absent param serves every entity and echoes nothing', () async {
+      final (:restricted, :body) = await pull('since=0');
+      expect(restricted, isNull);
+      expect(body.containsKey('entities'), isFalse);
+    });
+
+    test('blank param counts as absent', () async {
+      final (:restricted, :body) = await pull('since=0&entities=%20,');
+      expect(restricted, isNull);
+      expect(body.containsKey('entities'), isFalse);
+    });
+
+    test('restriction is passed on and echoed back', () async {
+      final (:restricted, :body) =
+          await pull('since=0&entities=plant,%20entry');
+      expect(restricted, {'entry', 'plant'});
+      expect(body['entities'], ['entry', 'plant']);
+    });
+  });
+
   group('ack', () {
     test('403 when deviceId mismatches JWT', () async {
       final req = _withContext(

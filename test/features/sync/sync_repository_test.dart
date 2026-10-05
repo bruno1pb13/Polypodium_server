@@ -298,11 +298,15 @@ void main() {
         required int since,
         required int limit,
         Set<String>? entryTypes,
+        Set<String>? entityTypes,
       }) async {
         final ids = <String>[];
         for (var page = 0; page < 50; page++) {
           final result = await repo.serveChanges(userId,
-              since: since, limit: limit, entryTypes: entryTypes);
+              since: since,
+              limit: limit,
+              entryTypes: entryTypes,
+              entityTypes: entityTypes);
           ids.addAll(result.changes.map((c) => c.entityId));
           if (result.changes.isNotEmpty) since = result.changes.last.rev;
           if (result.changes.isEmpty || !result.hasMore) {
@@ -418,6 +422,57 @@ void main() {
           expect(declared.ids, hasLength(15));
           expect(declared.cursor, all.last.rev);
         }
+      });
+
+      test('restricting to entries combines with the entry types filter, '
+          'pages included', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        SyncChange plant(String id) => SyncChange(
+              entityType: 'plant',
+              entityId: id,
+              payload: {'nickname': id},
+              updatedAt: DateTime.utc(2025, 1, 1),
+              deviceId: deviceId,
+              rev: 0,
+            );
+
+        await repo.receiveChanges(userId, deviceId, [
+          entry('e1', 'irrigation', deviceId),
+          plant('p1'),
+          entry('r1', 'repotting', deviceId),
+          plant('p2'),
+          entry('e2', 'irrigation', deviceId),
+          entry('r2', 'repotting', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+          plant('p3'),
+          entry('r3', 'repotting', deviceId),
+          plant('p4'),
+        ]);
+
+        final everything = await pullLikeClient(repo, userId,
+            since: 0, limit: 100, entryTypes: allTypes);
+        expect(everything.ids, hasLength(9));
+
+        for (final limit in [1, 2, 100]) {
+          final backfill = await pullLikeClient(repo, userId,
+              since: 0,
+              limit: limit,
+              entryTypes: {'repotting'},
+              entityTypes: {'entry'});
+          expect(backfill.ids, ['r1', 'r2', 'r3'], reason: 'limit $limit');
+
+          final entries = await pullLikeClient(repo, userId,
+              since: 0, limit: limit, entityTypes: {'entry'});
+          expect(entries.ids, ['e1', 'e2'], reason: 'limit $limit');
+        }
+
+        final plantsOnly = await repo.serveChanges(userId,
+            since: 0, limit: 100, entityTypes: {'plant', 'unknown'});
+        expect(plantsOnly.changes.map((c) => c.entityId),
+            ['p1', 'p2', 'p3', 'p4']);
       });
     });
 

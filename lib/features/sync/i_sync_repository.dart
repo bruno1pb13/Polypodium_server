@@ -7,12 +7,14 @@ abstract interface class ISyncRepository {
   /// sync, just scoped to `userId` and reachable publicly here).
   ///
   /// Only entries whose `payload.type` is in [entryTypes] are served (null
-  /// means a client that didn't declare them: `legacyEntryTypes`).
+  /// means a client that didn't declare them: `legacyEntryTypes`), and
+  /// only the entity types in [entityTypes] (null means all of them).
   Future<({List<SyncChange> changes, bool hasMore})> serveChanges(
     String userId, {
     required int since,
     required int limit,
     Set<String>? entryTypes,
+    Set<String>? entityTypes,
   });
 
   /// Accepts a batch of changes from a device (the client-server
