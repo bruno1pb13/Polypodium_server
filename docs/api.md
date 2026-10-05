@@ -51,7 +51,19 @@ Resposta `200`: mesmo formato do register, com o `role` da conta.
 
 ## Sync
 
-O modelo é de **linhas versionadas com last-write-wins** (LWW): cada entidade tem uma linha por `(user_id, entity_id)` com `updatedAt` (hora real da edição), `deletedAt` (tombstone de soft-delete — nada é apagado fisicamente) e `rev` (revisão monotônica atribuída pelo servidor a cada escrita).
+O modelo é de **linhas versionadas com last-write-wins** (LWW): cada entidade tem uma linha por `(jardim, entity_id)` com `updatedAt` (hora real da edição), `deletedAt` (tombstone de soft-delete — nada é apagado fisicamente) e `rev` (revisão monotônica atribuída pelo servidor a cada escrita).
+
+### Jardim (`X-Polypodium-Garden`)
+
+Os dados (e as fotos) pertencem a um **jardim**, não a uma conta: várias contas do servidor podem sincronizar o mesmo jardim (veja [Jardins](#jardins)). Toda rota de sync e de fotos age sobre um jardim só:
+
+```
+X-Polypodium-Garden: <id-do-jardim>
+```
+
+Sem o header (ou com ele vazio), vale o **jardim pessoal** da conta — que guarda tudo o que a conta sincronizava antes de os jardins existirem. Versões do app anteriores aos jardins, que não mandam o header, continuam funcionando sem mudança. Com um id de jardim do qual a conta não é membro (ou que não existe), a resposta é `403 { "error": "not a member of this garden" }`.
+
+Os conflitos continuam resolvidos por LWW por linha, com desempate pelo `deviceId` — aparelhos de contas diferentes escrevendo no mesmo jardim são tratados como aparelhos da mesma conta. A sequência de `rev` é global; o pull filtra pelo jardim.
 
 Tipos de entidade válidos: `species`, `plant`, `entry`, `entry_photo`, `location`, `soil`, `bed`, `defensivo`, `reminder`. Mudanças de outros tipos são descartadas no `receive`.
 
@@ -75,7 +87,7 @@ Formato de uma *change* (usado em `changes` e `receive`):
 
 ### `GET /sync/changes?since=<rev>&limit=<n>[&entities=<tipos>]`
 
-Pull: retorna as linhas do usuário com `rev > since`, de todos os tipos de entidade, ordenadas por `rev`. `limit` entre 1 e 1000 (padrão 100).
+Pull: retorna as linhas do jardim com `rev > since`, de todos os tipos de entidade, ordenadas por `rev`. `limit` entre 1 e 1000 (padrão 100).
 
 ```json
 { "changes": [ … ], "nextCursor": 57, "hasMore": false, "supportedEntities": ["bed", "defensivo", "entry", "entry_photo", "location", "plant", "reminder", "soil", "species"] }
@@ -123,7 +135,7 @@ Servidores anteriores a `ignoredEntityTypes` (e a `supportedEntities` no pull) d
 
 ### `POST /sync/ack`
 
-Registra o maior `rev` que o dispositivo já puxou. Só avança, nunca recua. Informativo — alimenta o `/sync/status`.
+Registra o maior `rev` que o dispositivo já puxou do jardim (um cursor por dispositivo e jardim). Só avança, nunca recua. Informativo — alimenta o `/sync/status`.
 
 ```json
 { "deviceId": "uuid", "cursor": 57 }
@@ -131,15 +143,50 @@ Registra o maior `rev` que o dispositivo já puxou. Só avança, nunca recua. In
 
 ### `GET /sync/status`
 
-Retorna o estado de sincronização do dispositivo atual (eventos pendentes, cursores).
+Retorna o estado de sincronização do dispositivo atual no jardim (eventos pendentes, cursores).
 
 ## Fotos
 
-Chave de foto é um nome de arquivo simples (sem `/` nem `..`); cada usuário tem seu próprio diretório no servidor.
+Chave de foto é um nome de arquivo simples (sem `/` nem `..`); cada jardim tem seu próprio diretório no servidor (o do jardim pessoal é o mesmo diretório que a conta usava antes dos jardins). As rotas seguem o header `X-Polypodium-Garden`, como o sync, e respondem `403` a quem não é membro.
 
 - `PUT /photos/<photoKey>` — corpo são os bytes crus da imagem (limite padrão 15 MB). Resposta: `{ "ok": true, "photoKey": "…" }`.
 - `GET /photos/<photoKey>` — devolve os bytes com o `Content-Type` inferido da extensão (jpg, png, webp, gif).
 - `HEAD /photos/<photoKey>` — `200` se a foto existe, `404` se não, sem corpo. O app usa isso no reenvio acima para não subir de novo os arquivos que já estão no servidor.
+
+## Jardins
+
+Todas exigem autenticação. Cada conta tem um jardim pessoal (id igual ao `userId`, `personal: true`, nome inicialmente vazio) e pode criar outros para compartilhar. Só o **dono** (`owner`) adiciona/remove membros e renomeia; qualquer **membro** lista os membros e pode sair. Um jardim do qual a conta não é membro responde `404`, sem revelar se existe. O jardim pessoal também pode receber membros.
+
+### `GET /gardens`
+
+Jardins de que a conta participa, o pessoal primeiro:
+
+```json
+{ "gardens": [
+  { "id": "…", "name": "", "personal": true, "role": "owner", "ownerUserId": "…", "ownerEmail": "voce@exemplo.com" },
+  { "id": "…", "name": "Horta", "personal": false, "role": "member", "ownerUserId": "…", "ownerEmail": "amiga@exemplo.com" }
+] }
+```
+
+### `POST /gardens`
+
+Cria um jardim vazio, com a conta como dona. Corpo `{ "name": "Horta" }` (1 a 100 caracteres). Resposta `201`: `{ "id": "…", "name": "Horta", "personal": false, "role": "owner" }`.
+
+### `PATCH /gardens/<id>`
+
+Só o dono. Corpo `{ "name": "…" }`. Resposta `{ "id": "…", "name": "…" }`; `403` para membros.
+
+### `GET /gardens/<id>/members`
+
+Qualquer membro. `{ "members": [ { "userId": "…", "email": "…", "role": "owner", "addedAt": "…" } ] }` — o dono primeiro.
+
+### `POST /gardens/<id>/members`
+
+Só o dono. Corpo `{ "email": "…" }` de uma conta **existente neste servidor** (contas novas continuam sendo criadas pelo admin). `201` com o membro; `404 account not found`; `409 already a member`; `403` para membros.
+
+### `DELETE /gardens/<id>/members/<userId>`
+
+O dono remove um membro; um membro, passando o próprio `userId`, sai do jardim. O dono não pode sair do próprio jardim (`400`); um membro removendo outra conta recebe `403`; `404` se a conta não era membro. Os dados que a conta escreveu permanecem no jardim.
 
 ## Admin
 
