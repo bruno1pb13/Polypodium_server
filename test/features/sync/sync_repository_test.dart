@@ -275,6 +275,152 @@ void main() {
       expect(reminder.payload['intervalDays'], 30);
     });
 
+    group('entry type filtering', () {
+      const allTypes = {...legacyEntryTypes, 'repotting'};
+
+      SyncChange entry(String id, String type, String deviceId,
+              {DateTime? deletedAt}) =>
+          SyncChange(
+            entityType: 'entry',
+            entityId: id,
+            payload: {'id': id, 'type': type},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deletedAt: deletedAt,
+            deviceId: deviceId,
+            rev: 0,
+          );
+
+      // Replays the pull loop every released client runs: the next `since`
+      // is the rev of the last change applied, and an empty page ends it.
+      Future<({List<String> ids, int cursor})> pullLikeClient(
+        SyncRepository repo,
+        String userId, {
+        required int since,
+        required int limit,
+        Set<String>? entryTypes,
+      }) async {
+        final ids = <String>[];
+        for (var page = 0; page < 50; page++) {
+          final result = await repo.serveChanges(userId,
+              since: since, limit: limit, entryTypes: entryTypes);
+          ids.addAll(result.changes.map((c) => c.entityId));
+          if (result.changes.isNotEmpty) since = result.changes.last.rev;
+          if (result.changes.isEmpty || !result.hasMore) {
+            return (ids: ids, cursor: since);
+          }
+        }
+        fail('pull did not terminate');
+      }
+
+      Future<({SyncRepository repo, String userId, String deviceId})?>
+          setUpUser() async {
+        final db = pool;
+        if (db == null) {
+          markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+          return null;
+        }
+        final userId = await _makeUser(db);
+        addTearDown(() => db
+            .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+                parameters: {'id': userId}));
+        final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
+        await _makeDevice(db, userId, deviceId);
+        return (repo: SyncRepository(db), userId: userId, deviceId: deviceId);
+      }
+
+      test('a client without the header gets only legacy types, tombstones '
+          'included; a declaring client gets what it declared', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        await repo.receiveChanges(userId, deviceId, [
+          entry('e-irrigation', 'irrigation', deviceId),
+          entry('e-repotting', 'repotting', deviceId),
+          entry('e-repotting-deleted', 'repotting', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+          entry('e-pesticide-deleted', 'pesticide', deviceId,
+              deletedAt: DateTime.utc(2025, 1, 2)),
+        ]);
+
+        Future<Set<String>> ids(Set<String>? entryTypes) async =>
+            (await repo.serveChanges(userId,
+                    since: 0, limit: 10, entryTypes: entryTypes))
+                .changes
+                .map((c) => c.entityId)
+                .toSet();
+
+        expect(await ids(null), {'e-irrigation', 'e-pesticide-deleted'});
+        expect(await ids(allTypes), {
+          'e-irrigation',
+          'e-repotting',
+          'e-repotting-deleted',
+          'e-pesticide-deleted',
+        });
+        expect(await ids({'repotting'}),
+            {'e-repotting', 'e-repotting-deleted'});
+      });
+
+      test('hidden rows never stall or loop the pull: a window made only of '
+          'hidden rows, and hidden rows at the tail', () async {
+        final ctx = await setUpUser();
+        if (ctx == null) return;
+        final (:repo, :userId, :deviceId) = ctx;
+
+        // irrigation, 5 hidden, plant, 3 hidden, irrigation, 4 hidden (tail).
+        await repo.receiveChanges(userId, deviceId, [
+          entry('e1', 'irrigation', deviceId),
+          for (var i = 0; i < 5; i++) entry('r-a$i', 'repotting', deviceId),
+          SyncChange(
+            entityType: 'plant',
+            entityId: 'p1',
+            payload: {'nickname': 'Samambaia'},
+            updatedAt: DateTime.utc(2025, 1, 1),
+            deviceId: deviceId,
+            rev: 0,
+          ),
+          for (var i = 0; i < 3; i++) entry('r-b$i', 'repotting', deviceId),
+          entry('e2', 'irrigation', deviceId),
+          for (var i = 0; i < 4; i++) entry('r-c$i', 'repotting', deviceId),
+        ]);
+
+        final all = (await repo.serveChanges(userId,
+                since: 0, limit: 100, entryTypes: allTypes))
+            .changes;
+        int revOf(String id) => all.firstWhere((c) => c.entityId == id).rev;
+
+        // The next rows after e1 (by rev) are all hidden; the page still
+        // reaches past them instead of coming back empty with hasMore.
+        final afterE1 = await repo.serveChanges(userId,
+            since: revOf('e1'), limit: 3);
+        expect(afterE1.changes.map((c) => c.entityId), ['p1', 'e2']);
+        expect(afterE1.hasMore, isFalse);
+
+        // Only hidden rows remain past e2: empty page, no hasMore.
+        final tail =
+            await repo.serveChanges(userId, since: revOf('e2'), limit: 3);
+        expect(tail.changes, isEmpty);
+        expect(tail.hasMore, isFalse);
+
+        for (final limit in [1, 2, 3, 100]) {
+          final legacy =
+              await pullLikeClient(repo, userId, since: 0, limit: limit);
+          expect(legacy.ids, ['e1', 'p1', 'e2'], reason: 'limit $limit');
+          expect(legacy.cursor, revOf('e2'));
+
+          // A later sync from that cursor finds nothing new and ends.
+          final again = await pullLikeClient(repo, userId,
+              since: legacy.cursor, limit: limit);
+          expect(again.ids, isEmpty);
+
+          final declared = await pullLikeClient(repo, userId,
+              since: 0, limit: limit, entryTypes: allTypes);
+          expect(declared.ids, hasLength(15));
+          expect(declared.cursor, all.last.rev);
+        }
+      });
+    });
+
     // The ON CONFLICT clause can't call incomingWins() directly, so the
     // package's shared vectors pin the SQL to it instead.
     group('ON CONFLICT clause agrees with incomingWins on lwwVectors', () {

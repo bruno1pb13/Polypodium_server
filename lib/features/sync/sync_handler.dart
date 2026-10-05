@@ -22,7 +22,8 @@ class SyncHandler {
     final limit =
         (int.tryParse(params['limit'] ?? '100') ?? 100).clamp(1, 1000);
 
-    final result = await _repo.serveChanges(userId, since: since, limit: limit);
+    final result = await _repo.serveChanges(userId,
+        since: since, limit: limit, entryTypes: _declaredEntryTypes(request));
     final nextCursor =
         result.changes.isNotEmpty ? result.changes.last.rev : since;
 
@@ -99,6 +100,17 @@ class SyncHandler {
     final data = await _repo.getStatus(userId, deviceId);
     return _json(200, data);
   }
+}
+
+/// Entry types the client declared it can parse, or null when it sent no
+/// (or a blank) `X-Polypodium-Entry-Types` header, i.e. a legacy client.
+Set<String>? _declaredEntryTypes(Request request) {
+  final types = (request.headers['x-polypodium-entry-types'] ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .where((t) => t.isNotEmpty)
+      .toSet();
+  return types.isEmpty ? null : types;
 }
 
 Response _json(int status, Object body) => Response(

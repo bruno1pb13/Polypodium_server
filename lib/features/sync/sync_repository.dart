@@ -16,6 +16,23 @@ const _matTable = {
   'reminder': 'mat_reminders',
 };
 
+/// Entry types understood by every app release that predates the
+/// `X-Polypodium-Entry-Types` header (frozen at v2.7.2). Those releases throw
+/// on any other `payload.type` -- tombstones included -- so they must never
+/// receive one.
+const legacyEntryTypes = {
+  'irrigation',
+  'fertilizer',
+  'pruning',
+  'observation',
+  'height',
+  'chlorosis',
+  'pest',
+  'pesticide',
+  'other',
+  'history',
+};
+
 const _validEntityTypes = {
   'species',
   'plant',
@@ -36,19 +53,32 @@ class SyncRepository implements ISyncRepository {
     String userId, {
     required int since,
     required int limit,
+    Set<String>? entryTypes,
   }) async {
     final candidates = <SyncChange>[];
 
     for (final entry in _matTable.entries) {
+      // Filtering inside the query (not after it) keeps hidden rows out of
+      // both the page and the hasMore probe, so a client's cursor -- the rev
+      // of the last change it applied -- always advances.
+      final isEntries = entry.key == 'entry';
       final result = await _db.execute(
         Sql.named('''
           SELECT entity_id, payload, updated_at, deleted_at, device_id, rev
           FROM ${entry.value}
           WHERE user_id = @userId AND rev > @since
+            ${isEntries ? "AND payload->>'type' = ANY(@entryTypes)" : ''}
           ORDER BY rev
           LIMIT @limit
         '''),
-        parameters: {'userId': userId, 'since': since, 'limit': limit + 1},
+        parameters: {
+          'userId': userId,
+          'since': since,
+          'limit': limit + 1,
+          if (isEntries)
+            'entryTypes': TypedValue(
+                Type.textArray, (entryTypes ?? legacyEntryTypes).toList()),
+        },
       );
 
       for (final row in result) {

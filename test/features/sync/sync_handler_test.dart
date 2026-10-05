@@ -64,6 +64,43 @@ void main() {
     });
   });
 
+  group('changes entry types header', () {
+    Future<Set<String>?> declaredFor(Map<String, String> headers) async {
+      when(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: any(named: 'entryTypes')))
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
+
+      await handler.changes(_withContext(Request(
+          'GET', Uri.parse('http://localhost/changes?since=0'),
+          headers: headers)));
+      return verify(() => repo.serveChanges(any(),
+              since: any(named: 'since'),
+              limit: any(named: 'limit'),
+              entryTypes: captureAny(named: 'entryTypes')))
+          .captured
+          .single as Set<String>?;
+    }
+
+    test('absent header leaves the legacy default to the repository',
+        () async {
+      expect(await declaredFor({}), isNull);
+    });
+
+    test('blank header counts as absent', () async {
+      expect(await declaredFor({'X-Polypodium-Entry-Types': ' , '}), isNull);
+    });
+
+    test('declared types are trimmed into a set', () async {
+      expect(
+        await declaredFor(
+            {'X-Polypodium-Entry-Types': 'irrigation, repotting,irrigation'}),
+        {'irrigation', 'repotting'},
+      );
+    });
+  });
+
   group('ack', () {
     test('403 when deviceId mismatches JWT', () async {
       final req = _withContext(

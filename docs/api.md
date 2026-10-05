@@ -81,6 +81,18 @@ Pull: retorna as linhas do usuário com `rev > since`, de todos os tipos de enti
 
 O cliente repete enquanto `hasMore = true`, passando `nextCursor` como `since`.
 
+#### Tipos de registro (`X-Polypodium-Entry-Types`)
+
+O payload de uma `entry` traz o tipo do registro em `type`, e versões do app até a v2.7.2 lançam erro ao receber um tipo que não conhecem — inclusive em tombstones — o que travaria o pull desses aparelhos para sempre. Por isso o cliente declara os tipos que entende:
+
+```
+X-Polypodium-Entry-Types: irrigation,fertilizer,pruning,observation,height,chlorosis,pest,pesticide,other,history,repotting
+```
+
+O servidor só envia as `entry` (vivas ou tombstones) cujo `type` está na lista. Sem o header (ou com ele vazio), o cliente é tratado como legado e recebe apenas os 10 tipos originais: `irrigation`, `fertilizer`, `pruning`, `observation`, `height`, `chlorosis`, `pest`, `pesticide`, `other`, `history`. As demais entidades não são filtradas — clientes antigos ignoram `entityType` desconhecidos.
+
+O filtro é aplicado na própria consulta, então as linhas ocultas não entram nem na página nem no cálculo de `hasMore`: o cursor do cliente (o `rev` da última mudança aplicada, que é igual ao `nextCursor`) sempre avança, e uma janela só de linhas ocultas nunca devolve página vazia com `hasMore = true`. Em contrapartida, uma linha oculta que fique para trás do cursor não é reenviada se o cliente passar a declarar o tipo depois (ex.: ao atualizar o app) — só uma nova edição dela gera um `rev` novo.
+
 ### `POST /sync/receive`
 
 Push: o cliente envia suas mudanças locais (máximo 500 por lote). O `deviceId` do corpo precisa bater com o do token.
