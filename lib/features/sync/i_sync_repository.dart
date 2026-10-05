@@ -1,11 +1,11 @@
-import 'mat_change_model.dart';
+import 'package:polypodium_core/polypodium_core.dart';
 
 abstract interface class ISyncRepository {
   /// Serves this user's changes with `rev > since`, across all entity
   /// types, merged into a single rev-ordered stream (mirrors the same
   /// role a peer's `serveChanges` would play in a future direct-peer
   /// sync, just scoped to `userId` and reachable publicly here).
-  Future<({List<MatChange> changes, bool hasMore})> serveChanges(
+  Future<({List<SyncChange> changes, bool hasMore})> serveChanges(
     String userId, {
     required int since,
     required int limit,
@@ -18,7 +18,7 @@ abstract interface class ISyncRepository {
   Future<int> receiveChanges(
     String userId,
     String deviceId,
-    List<MatChange> changes,
+    List<SyncChange> changes,
   );
 
   Future<void> ackCursor(String deviceId, int cursor);

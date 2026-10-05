@@ -289,6 +289,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.9.1"
+  polypodium_core:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: "v0.1.0"
+      resolved-ref: "9e533da060b64437f9758317d0813d2aecc93301"
+      url: "https://github.com/bruno1pb13/polypodium_core.git"
+    source: git
+    version: "0.1.0"
   pool:
     dependency: transitive
     description:

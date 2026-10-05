@@ -1,11 +1,11 @@
 import 'dart:convert';
 
 import 'package:mocktail/mocktail.dart';
+import 'package:polypodium_core/polypodium_core.dart';
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
 import 'package:polypodium_server/features/sync/i_sync_repository.dart';
-import 'package:polypodium_server/features/sync/mat_change_model.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 
 class _MockSyncRepo extends Mock implements ISyncRepository {}
@@ -25,7 +25,7 @@ void main() {
   group('changes', () {
     test('returns changes and correct cursor', () async {
       final changes = [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: 'p1',
           payload: {'name': 'Fern'},
@@ -53,7 +53,7 @@ void main() {
     test('nextCursor equals since when no changes', () async {
       when(() => repo.serveChanges(any(),
               since: any(named: 'since'), limit: any(named: 'limit')))
-          .thenAnswer((_) async => (changes: <MatChange>[], hasMore: false));
+          .thenAnswer((_) async => (changes: <SyncChange>[], hasMore: false));
 
       final req = _withContext(
           Request('GET', Uri.parse('http://localhost/changes?since=42')));
