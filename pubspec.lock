@@ -293,11 +293,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "v0.1.0"
-      resolved-ref: "9e533da060b64437f9758317d0813d2aecc93301"
+      ref: "v0.2.0"
+      resolved-ref: "43f8f0297790686d61e45f4d73de68dc12e04e53"
       url: "https://github.com/bruno1pb13/polypodium_core.git"
     source: git
-    version: "0.1.0"
+    version: "0.2.0"
   pool:
     dependency: transitive
     description:
