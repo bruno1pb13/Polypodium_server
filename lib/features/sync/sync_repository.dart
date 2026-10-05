@@ -40,7 +40,7 @@ class SyncRepository implements ISyncRepository {
 
   @override
   Future<({List<SyncChange> changes, bool hasMore})> serveChanges(
-    String userId, {
+    String gardenId, {
     required int since,
     required int limit,
     Set<String>? entryTypes,
@@ -58,13 +58,13 @@ class SyncRepository implements ISyncRepository {
         Sql.named('''
           SELECT entity_id, payload, updated_at, deleted_at, device_id, rev
           FROM ${entry.value}
-          WHERE user_id = @userId AND rev > @since
+          WHERE garden_id = @gardenId AND rev > @since
             ${isEntries ? "AND payload->>'type' = ANY(@entryTypes)" : ''}
           ORDER BY rev
           LIMIT @limit
         '''),
         parameters: {
-          'userId': userId,
+          'gardenId': gardenId,
           'since': since,
           'limit': limit + 1,
           if (isEntries)
@@ -100,6 +100,7 @@ class SyncRepository implements ISyncRepository {
 
   @override
   Future<int> receiveChanges(
+    String gardenId,
     String userId,
     String deviceId,
     List<SyncChange> changes,
@@ -114,11 +115,12 @@ class SyncRepository implements ISyncRepository {
         final result = await session.execute(
           Sql.named('''
             INSERT INTO $table
-              (entity_id, user_id, payload, updated_at, deleted_at, device_id, rev)
+              (entity_id, garden_id, user_id, payload, updated_at, deleted_at, device_id, rev)
             VALUES
-              (@entityId, @userId, @payload::jsonb, @updatedAt, @deletedAt, @deviceId, nextval('mat_rev_seq'))
-            ON CONFLICT (user_id, entity_id) DO UPDATE
+              (@entityId, @gardenId, @userId, @payload::jsonb, @updatedAt, @deletedAt, @deviceId, nextval('mat_rev_seq'))
+            ON CONFLICT (garden_id, entity_id) DO UPDATE
               SET payload = EXCLUDED.payload,
+                  user_id = EXCLUDED.user_id,
                   updated_at = EXCLUDED.updated_at,
                   deleted_at = EXCLUDED.deleted_at,
                   device_id = EXCLUDED.device_id,
@@ -133,6 +135,7 @@ class SyncRepository implements ISyncRepository {
           '''),
           parameters: {
             'entityId': change.entityId,
+            'gardenId': gardenId,
             'userId': userId,
             'payload': jsonEncode(change.payload),
             'updatedAt': change.updatedAt,
@@ -149,26 +152,28 @@ class SyncRepository implements ISyncRepository {
   }
 
   @override
-  Future<void> ackCursor(String deviceId, int cursor) async {
+  Future<void> ackCursor(String deviceId, String gardenId, int cursor) async {
     await _db.execute(
       Sql.named('''
-        INSERT INTO device_cursors (device_id, last_pulled_cursor)
-        VALUES (@deviceId, @cursor)
-        ON CONFLICT (device_id) DO UPDATE
+        INSERT INTO device_cursors (device_id, garden_id, last_pulled_cursor)
+        VALUES (@deviceId, @gardenId, @cursor)
+        ON CONFLICT (device_id, garden_id) DO UPDATE
           SET last_pulled_cursor = EXCLUDED.last_pulled_cursor
           WHERE EXCLUDED.last_pulled_cursor > device_cursors.last_pulled_cursor
       '''),
-      parameters: {'deviceId': deviceId, 'cursor': cursor},
+      parameters: {'deviceId': deviceId, 'gardenId': gardenId, 'cursor': cursor},
     );
   }
 
   @override
   Future<Map<String, dynamic>> getStatus(
-      String userId, String deviceId) async {
+      String gardenId, String deviceId) async {
     final cursorRow = await _db.execute(
-      Sql.named(
-          'SELECT last_pulled_cursor FROM device_cursors WHERE device_id = @id'),
-      parameters: {'id': deviceId},
+      Sql.named('''
+        SELECT last_pulled_cursor FROM device_cursors
+        WHERE device_id = @id AND garden_id = @gardenId
+      '''),
+      parameters: {'id': deviceId, 'gardenId': gardenId},
     );
     final lastPulled = cursorRow.isNotEmpty ? (cursorRow.first[0] as int) : 0;
 
@@ -178,8 +183,8 @@ class SyncRepository implements ISyncRepository {
     for (final table in _matTable.values) {
       final latestRow = await _db.execute(
         Sql.named(
-            'SELECT COALESCE(MAX(rev), 0) FROM $table WHERE user_id = @userId'),
-        parameters: {'userId': userId},
+            'SELECT COALESCE(MAX(rev), 0) FROM $table WHERE garden_id = @gardenId'),
+        parameters: {'gardenId': gardenId},
       );
       final tableLatest = (latestRow.first[0] as num).toInt();
       if (tableLatest > serverLatest) serverLatest = tableLatest;
@@ -187,10 +192,10 @@ class SyncRepository implements ISyncRepository {
       final countRow = await _db.execute(
         Sql.named('''
           SELECT COUNT(*) FROM $table
-          WHERE user_id = @userId AND rev > @cursor AND device_id != @deviceId
+          WHERE garden_id = @gardenId AND rev > @cursor AND device_id != @deviceId
         '''),
         parameters: {
-          'userId': userId,
+          'gardenId': gardenId,
           'cursor': lastPulled,
           'deviceId': deviceId,
         },

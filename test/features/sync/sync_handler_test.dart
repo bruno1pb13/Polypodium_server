@@ -20,7 +20,11 @@ void main() {
   });
 
   Request _withContext(Request req) =>
-      req.change(context: {'userId': 'user1', 'deviceId': 'device1'});
+      req.change(context: {
+        'userId': 'user1',
+        'gardenId': 'garden1',
+        'deviceId': 'device1',
+      });
 
   group('changes', () {
     test('returns changes and correct cursor', () async {
@@ -183,7 +187,7 @@ void main() {
     });
 
     test('200 on success', () async {
-      when(() => repo.ackCursor(any(), any())).thenAnswer((_) async {});
+      when(() => repo.ackCursor(any(), any(), any())).thenAnswer((_) async {});
 
       final req = _withContext(
         Request('POST', Uri.parse('http://localhost/ack'),
@@ -191,7 +195,7 @@ void main() {
       );
       final res = await handler.ack(req);
       expect(res.statusCode, 200);
-      verify(() => repo.ackCursor('device1', 10)).called(1);
+      verify(() => repo.ackCursor('device1', 'garden1', 10)).called(1);
     });
 
     test('400 when cursor is missing', () async {
@@ -236,7 +240,7 @@ void main() {
     });
 
     test('200 with appliedCount on success', () async {
-      when(() => repo.receiveChanges(any(), any(), any()))
+      when(() => repo.receiveChanges(any(), any(), any(), any()))
           .thenAnswer((_) async => 2);
 
       final changes = [
@@ -270,10 +274,14 @@ void main() {
           jsonDecode(await res.readAsString()) as Map<String, dynamic>;
       expect(body['appliedCount'], 2);
       expect(body['ignoredEntityTypes'], isEmpty);
+      // The garden comes from the context (gardenMiddleware), the writer
+      // from the token.
+      verify(() => repo.receiveChanges('garden1', 'user1', 'device1', any()))
+          .called(1);
     });
 
     test('reports the entity types it dropped from the batch', () async {
-      when(() => repo.receiveChanges(any(), any(), any()))
+      when(() => repo.receiveChanges(any(), any(), any(), any()))
           .thenAnswer((_) async => 1);
 
       Map<String, dynamic> change(String type, String id) => {

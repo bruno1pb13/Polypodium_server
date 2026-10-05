@@ -2,30 +2,41 @@ import 'package:postgres/postgres.dart';
 import '../core/config.dart';
 
 Future<Pool> initDatabase() async {
-  final uri = Uri.parse(Config.databaseUrl);
-  final userInfo = uri.userInfo.split(':');
-
   final pool = Pool.withEndpoints(
-    [
-      Endpoint(
-        host: uri.host,
-        port: uri.port == 0 ? 5432 : uri.port,
-        database: uri.path.substring(1),
-        username: userInfo.isNotEmpty ? userInfo[0] : 'postgres',
-        password: userInfo.length > 1 ? userInfo[1] : '',
-      ),
-    ],
+    [databaseEndpoint()],
     settings: PoolSettings(
       maxConnectionCount: 10,
       sslMode: Config.dbSsl ? SslMode.require : SslMode.disable,
     ),
   );
 
-  await _runMigrations(pool);
+  await runMigrations(pool);
   return pool;
 }
 
-Future<void> _runMigrations(Pool pool) async {
+Endpoint databaseEndpoint() {
+  final uri = Uri.parse(Config.databaseUrl);
+  final userInfo = uri.userInfo.split(':');
+  return Endpoint(
+    host: uri.host,
+    port: uri.port == 0 ? 5432 : uri.port,
+    database: uri.path.substring(1),
+    username: userInfo.isNotEmpty ? userInfo[0] : 'postgres',
+    password: userInfo.length > 1 ? userInfo[1] : '',
+  );
+}
+
+/// Brings the schema up to date. Runs on every boot, so each step must be
+/// idempotent; the whole run is one transaction (a failed upgrade leaves the
+/// previous schema intact) serialized by an advisory lock, so two server
+/// instances -- or test files -- booting together never interleave DDL.
+Future<void> runMigrations(SessionExecutor db) =>
+    db.runTx((tx) async {
+      await tx.execute(Sql('SELECT pg_advisory_xact_lock(918273646)'));
+      await _runMigrations(tx);
+    });
+
+Future<void> _runMigrations(Session pool) async {
   await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS users (
       id           TEXT PRIMARY KEY,
@@ -59,10 +70,70 @@ Future<void> _runMigrations(Pool pool) async {
   // preserve).
   await pool.execute(Sql('DROP TABLE IF EXISTS sync_events'));
 
+  // Gardens (jardins) are the unit synced data belongs to. Every account
+  // owns a personal garden whose id is the account's own id, which is what
+  // lets pre-garden data (scoped by user_id) and photo directories (named
+  // after the user id) move in place. `personal` marks the garden a request
+  // without a garden selector uses; other gardens are created explicitly
+  // and shared through garden_members.
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS gardens (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL DEFAULT '',
+      owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      personal      BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  '''));
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS garden_members (
+      garden_id TEXT NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+      user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role      TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+      added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (garden_id, user_id)
+    )
+  '''));
+  await pool.execute(Sql(
+      'CREATE INDEX IF NOT EXISTS idx_garden_members_user ON garden_members(user_id)'));
+  // Backfills a personal garden for every account (all of them on the first
+  // upgrade; afterwards only accounts created some other way than
+  // AuthRepository). Owner membership is derived from gardens itself, so a
+  // garden id colliding with a user id can never grant that user anything.
+  await pool.execute(Sql('''
+    INSERT INTO gardens (id, owner_user_id, personal)
+    SELECT id, id, TRUE FROM users
+    ON CONFLICT (id) DO NOTHING
+  '''));
+  await pool.execute(Sql('''
+    INSERT INTO garden_members (garden_id, user_id, role)
+    SELECT id, owner_user_id, 'owner' FROM gardens WHERE personal
+    ON CONFLICT DO NOTHING
+  '''));
+
+  // A device pulls each garden it syncs with its own cursor.
+  if (await _tableExists(pool, 'device_cursors') &&
+      !await _columnExists(pool, 'device_cursors', 'garden_id')) {
+    // Pre-garden cursors belonged to the device's account, i.e. its
+    // personal garden.
+    await pool.execute(Sql(
+        'ALTER TABLE device_cursors ADD COLUMN garden_id TEXT REFERENCES gardens(id) ON DELETE CASCADE'));
+    await pool.execute(Sql('''
+      UPDATE device_cursors c SET garden_id = d.user_id
+      FROM devices d WHERE d.id = c.device_id
+    '''));
+    await pool.execute(
+        Sql('DELETE FROM device_cursors WHERE garden_id IS NULL'));
+    await pool.execute(
+        Sql('ALTER TABLE device_cursors ALTER COLUMN garden_id SET NOT NULL'));
+    await _replacePrimaryKey(pool, 'device_cursors', 'device_id, garden_id');
+  }
   await pool.execute(Sql('''
     CREATE TABLE IF NOT EXISTS device_cursors (
-      device_id          TEXT PRIMARY KEY REFERENCES devices(id),
-      last_pulled_cursor BIGINT NOT NULL DEFAULT 0
+      device_id          TEXT NOT NULL REFERENCES devices(id),
+      garden_id          TEXT NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+      last_pulled_cursor BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (device_id, garden_id)
     )
   '''));
 
@@ -114,23 +185,83 @@ Future<void> _runMigrations(Pool pool) async {
     if (legacyShape.first[0] as bool) {
       await pool.execute(Sql('DROP TABLE $table'));
     }
+
+    // Pre-garden tables were keyed (user_id, entity_id): every row moves to
+    // its account's personal garden (whose id is the user id) in place, so
+    // revs, timestamps and tombstones stay untouched. user_id survives as
+    // the account that last wrote the row, without the FK that would let
+    // deleting a member's account cascade into a shared garden.
+    if (await _tableExists(pool, table) &&
+        !await _columnExists(pool, table, 'garden_id')) {
+      await pool.execute(Sql(
+          'ALTER TABLE $table ADD COLUMN garden_id TEXT REFERENCES gardens(id) ON DELETE CASCADE'));
+      await pool.execute(Sql('UPDATE $table SET garden_id = user_id'));
+      await pool.execute(
+          Sql('ALTER TABLE $table ALTER COLUMN garden_id SET NOT NULL'));
+      await _replacePrimaryKey(pool, table, 'garden_id, entity_id');
+      final userFks = await pool.execute(Sql('''
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = '$table'::regclass AND contype = 'f'
+          AND confrelid = 'users'::regclass
+      '''));
+      for (final row in userFks) {
+        await pool.execute(
+            Sql('ALTER TABLE $table DROP CONSTRAINT "${row[0]}"'));
+      }
+      await pool.execute(Sql('DROP INDEX IF EXISTS idx_${table}_rev'));
+    }
+
     await pool.execute(Sql('''
       CREATE TABLE IF NOT EXISTS $table (
         entity_id  TEXT NOT NULL,
-        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        garden_id  TEXT NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+        -- Account that last wrote the row (informational).
+        user_id    TEXT NOT NULL,
         payload    JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL,
         deleted_at TIMESTAMPTZ NULL,
         device_id  TEXT NOT NULL,
         rev        BIGINT NOT NULL DEFAULT nextval('mat_rev_seq'),
         -- Composite PK (not just entity_id): a client-generated UUID
-        -- colliding across two different users would otherwise let one
-        -- user's write silently overwrite another's, since entity_id alone
-        -- was both the old PK and the old ON CONFLICT target.
-        PRIMARY KEY (user_id, entity_id)
+        -- colliding across two gardens must never let a write to one
+        -- overwrite the other's row.
+        PRIMARY KEY (garden_id, entity_id)
       )
     '''));
-    await pool.execute(
-        Sql('CREATE INDEX IF NOT EXISTS idx_${table}_rev ON $table(user_id, rev)'));
+    await pool.execute(Sql(
+        'CREATE INDEX IF NOT EXISTS idx_${table}_garden_rev ON $table(garden_id, rev)'));
   }
+}
+
+Future<bool> _tableExists(Session db, String table) async {
+  final result = await db.execute(Sql('''
+    SELECT EXISTS (
+      SELECT FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name = '$table'
+    )
+  '''));
+  return result.first[0] as bool;
+}
+
+Future<bool> _columnExists(Session db, String table, String column) async {
+  final result = await db.execute(Sql('''
+    SELECT EXISTS (
+      SELECT FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = '$table' AND column_name = '$column'
+    )
+  '''));
+  return result.first[0] as bool;
+}
+
+/// Swaps [table]'s primary key for one on [columns], looking the old
+/// constraint up by kind rather than assuming its generated name.
+Future<void> _replacePrimaryKey(
+    Session db, String table, String columns) async {
+  final pk = await db.execute(Sql(
+      "SELECT conname FROM pg_constraint WHERE conrelid = '$table'::regclass AND contype = 'p'"));
+  for (final row in pk) {
+    await db.execute(Sql('ALTER TABLE $table DROP CONSTRAINT "${row[0]}"'));
+  }
+  await db.execute(Sql('ALTER TABLE $table ADD PRIMARY KEY ($columns)'));
 }

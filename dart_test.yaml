@@ -1,0 +1,4 @@
+# The Postgres-backed suites share one database, and boot migrations
+# (initDatabase) take table locks that deadlock against another file's
+# writes when test files run in parallel.
+concurrency: 1

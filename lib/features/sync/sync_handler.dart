@@ -13,10 +13,10 @@ class SyncHandler {
   final ISyncRepository _repo;
 
   /// `GET /sync/changes?since=&limit=&entities=` — a real pull: returns
-  /// this user's rows with `rev > since`, across every entity type unless
+  /// the garden's rows with `rev > since`, across every entity type unless
   /// `entities` restricts them.
   Future<Response> changes(Request request) async {
-    final userId = request.context['userId'] as String;
+    final gardenId = request.context['gardenId'] as String;
 
     final params = request.url.queryParameters;
     final since = math.max(0, int.tryParse(params['since'] ?? '0') ?? 0);
@@ -25,7 +25,7 @@ class SyncHandler {
 
     final entities = _csvSet(params['entities']);
 
-    final result = await _repo.serveChanges(userId,
+    final result = await _repo.serveChanges(gardenId,
         since: since,
         limit: limit,
         entryTypes: _declaredEntryTypes(request),
@@ -52,6 +52,7 @@ class SyncHandler {
   /// its own local changes to us; internally applied via the same
   /// last-write-wins logic `receiveChanges` would use for any peer.
   Future<Response> receive(Request request) async {
+    final gardenId = request.context['gardenId'] as String;
     final userId = request.context['userId'] as String;
     final jwtDeviceId = request.context['deviceId'] as String;
 
@@ -79,7 +80,7 @@ class SyncHandler {
       return _error(400, 'malformed change in batch');
     }
 
-    final appliedCount = await _repo.receiveChanges(userId, deviceId, changes);
+    final appliedCount = await _repo.receiveChanges(gardenId, userId, deviceId, changes);
     final ignored = {
       for (final c in changes)
         if (!syncEntityTypes.contains(c.entityType)) c.entityType,
@@ -93,6 +94,7 @@ class SyncHandler {
   }
 
   Future<Response> ack(Request request) async {
+    final gardenId = request.context['gardenId'] as String;
     final jwtDeviceId = request.context['deviceId'] as String;
 
     final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
@@ -110,16 +112,16 @@ class SyncHandler {
     }
 
     final cursorInt = cursor.toInt();
-    await _repo.ackCursor(deviceId, cursorInt);
+    await _repo.ackCursor(deviceId, gardenId, cursorInt);
 
     return _json(200, {'ok': true});
   }
 
   Future<Response> status(Request request) async {
-    final userId = request.context['userId'] as String;
+    final gardenId = request.context['gardenId'] as String;
     final deviceId = request.context['deviceId'] as String;
 
-    final data = await _repo.getStatus(userId, deviceId);
+    final data = await _repo.getStatus(gardenId, deviceId);
     return _json(200, data);
   }
 }

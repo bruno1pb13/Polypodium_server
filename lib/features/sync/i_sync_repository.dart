@@ -15,16 +15,16 @@ const syncEntityTypes = {
 };
 
 abstract interface class ISyncRepository {
-  /// Serves this user's changes with `rev > since`, across all entity
+  /// Serves this garden's changes with `rev > since`, across all entity
   /// types, merged into a single rev-ordered stream (mirrors the same
   /// role a peer's `serveChanges` would play in a future direct-peer
-  /// sync, just scoped to `userId` and reachable publicly here).
+  /// sync, just scoped to `gardenId` and reachable publicly here).
   ///
   /// Only entries whose `payload.type` is in [entryTypes] are served (null
   /// means a client that didn't declare them: `legacyEntryTypes`), and
   /// only the entity types in [entityTypes] (null means all of them).
   Future<({List<SyncChange> changes, bool hasMore})> serveChanges(
-    String userId, {
+    String gardenId, {
     required int since,
     required int limit,
     Set<String>? entryTypes,
@@ -34,13 +34,14 @@ abstract interface class ISyncRepository {
   /// Accepts a batch of changes from a device (the client-server
   /// equivalent of a peer initiating `receiveChanges` on us). Applies each
   /// via last-write-wins on `updatedAt` and returns how many rows were
-  /// actually mutated.
+  /// actually mutated. [userId] is recorded as the row's last writer.
   Future<int> receiveChanges(
+    String gardenId,
     String userId,
     String deviceId,
     List<SyncChange> changes,
   );
 
-  Future<void> ackCursor(String deviceId, int cursor);
-  Future<Map<String, dynamic>> getStatus(String userId, String deviceId);
+  Future<void> ackCursor(String deviceId, String gardenId, int cursor);
+  Future<Map<String, dynamic>> getStatus(String gardenId, String deviceId);
 }

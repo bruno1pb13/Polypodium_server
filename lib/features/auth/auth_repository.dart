@@ -1,4 +1,5 @@
 import 'package:postgres/postgres.dart';
+import '../gardens/garden_repository.dart';
 import 'i_auth_repository.dart';
 
 class AuthRepository implements IAuthRepository {
@@ -39,13 +40,21 @@ class AuthRepository implements IAuthRepository {
   @override
   Future<Map<String, dynamic>> createUser(
       String id, String email, String passwordHash, String role) async {
-    await _db.execute(
-      Sql.named('''
-        INSERT INTO users (id, email, password_hash, role)
-        VALUES (@id, @email, @hash, @role)
-      '''),
-      parameters: {'id': id, 'email': email, 'hash': passwordHash, 'role': role},
-    );
+    await _db.runTx((tx) async {
+      await tx.execute(
+        Sql.named('''
+          INSERT INTO users (id, email, password_hash, role)
+          VALUES (@id, @email, @hash, @role)
+        '''),
+        parameters: {
+          'id': id,
+          'email': email,
+          'hash': passwordHash,
+          'role': role
+        },
+      );
+      await createPersonalGarden(tx, id);
+    });
     return {'id': id, 'email': email, 'role': role};
   }
 
@@ -69,6 +78,7 @@ class AuthRepository implements IAuthRepository {
         '''),
         parameters: {'id': id, 'email': email, 'hash': passwordHash},
       );
+      await createPersonalGarden(session, id);
       return true;
     });
   }
@@ -126,14 +136,6 @@ class AuthRepository implements IAuthRepository {
         ON CONFLICT (id) DO NOTHING
       '''),
       parameters: {'id': deviceId, 'userId': userId, 'name': deviceName},
-    );
-    await _db.execute(
-      Sql.named('''
-        INSERT INTO device_cursors (device_id, last_pulled_cursor)
-        VALUES (@deviceId, 0)
-        ON CONFLICT (device_id) DO NOTHING
-      '''),
-      parameters: {'deviceId': deviceId},
     );
   }
 

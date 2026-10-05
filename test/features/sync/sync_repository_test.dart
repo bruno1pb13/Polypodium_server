@@ -15,6 +15,7 @@ import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
 import 'package:polypodium_server/database/db.dart';
+import 'package:polypodium_server/features/gardens/garden_repository.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
 
@@ -42,6 +43,7 @@ void main() {
       '''),
       parameters: {'id': userId, 'email': '$userId@test.local'},
     );
+    await db.runTx((tx) => createPersonalGarden(tx, userId));
     return userId;
   }
 
@@ -75,7 +77,7 @@ void main() {
 
       // Newer edit applied first, older edit arrives second (out-of-order
       // delivery) -- the older one must lose despite arriving later.
-      final appliedNewer = await repo.receiveChanges(userId, deviceId, [
+      final appliedNewer = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p1',
@@ -85,7 +87,7 @@ void main() {
           rev: 0,
         ),
       ]);
-      final appliedOlder = await repo.receiveChanges(userId, deviceId, [
+      final appliedOlder = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p1',
@@ -104,7 +106,7 @@ void main() {
       expect(plant.payload['name'], 'v2-newer');
     });
 
-    test('composite (user_id, entity_id) PK keeps two users with the same '
+    test('composite (garden_id, entity_id) PK keeps two gardens with the same '
         'entity id apart', () async {
       final db = pool;
       if (db == null) {
@@ -127,7 +129,7 @@ void main() {
               parameters: {'id': userB}));
 
       const sharedEntityId = 'colliding-uuid';
-      await repo.receiveChanges(userA, deviceA, [
+      await repo.receiveChanges(userA, userA, deviceA, [
         SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
@@ -137,7 +139,7 @@ void main() {
           rev: 0,
         ),
       ]);
-      await repo.receiveChanges(userB, deviceB, [
+      await repo.receiveChanges(userB, userB, deviceB, [
         SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
@@ -171,7 +173,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      final applied = await repo.receiveChanges(userId, deviceId, [
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'defensivo',
           entityId: 'd1',
@@ -205,7 +207,11 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
       Request withContext(Request r) =>
-          r.change(context: {'userId': userId, 'deviceId': deviceId});
+          r.change(context: {
+            'userId': userId,
+            'gardenId': userId,
+            'deviceId': deviceId,
+          });
       SyncChange change(String type, String id) => SyncChange(
             entityType: type,
             entityId: id,
@@ -266,7 +272,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      await repo.receiveChanges(userId, deviceId, [
+      await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'plant',
           entityId: 'p-new',
@@ -314,7 +320,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      final applied = await repo.receiveChanges(userId, deviceId, [
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'reminder',
           entityId: 'r1',
@@ -356,7 +362,7 @@ void main() {
       final deviceId = 'device-a-${DateTime.now().microsecondsSinceEpoch}';
       await _makeDevice(db, userId, deviceId);
 
-      final applied = await repo.receiveChanges(userId, deviceId, [
+      final applied = await repo.receiveChanges(userId, userId, deviceId, [
         SyncChange(
           entityType: 'entry',
           entityId: 'e1',
@@ -468,7 +474,7 @@ void main() {
         if (ctx == null) return;
         final (:repo, :userId, :deviceId) = ctx;
 
-        await repo.receiveChanges(userId, deviceId, [
+        await repo.receiveChanges(userId, userId, deviceId, [
           entry('e-irrigation', 'irrigation', deviceId),
           entry('e-repotting', 'repotting', deviceId),
           entry('e-repotting-deleted', 'repotting', deviceId,
@@ -502,7 +508,7 @@ void main() {
         final (:repo, :userId, :deviceId) = ctx;
 
         // irrigation, 5 hidden, plant, 3 hidden, irrigation, 4 hidden (tail).
-        await repo.receiveChanges(userId, deviceId, [
+        await repo.receiveChanges(userId, userId, deviceId, [
           entry('e1', 'irrigation', deviceId),
           for (var i = 0; i < 5; i++) entry('r-a$i', 'repotting', deviceId),
           SyncChange(
@@ -569,7 +575,7 @@ void main() {
               rev: 0,
             );
 
-        await repo.receiveChanges(userId, deviceId, [
+        await repo.receiveChanges(userId, userId, deviceId, [
           entry('e1', 'irrigation', deviceId),
           plant('p1'),
           entry('r1', 'repotting', deviceId),
@@ -628,7 +634,7 @@ void main() {
           final currentDeviceId = v.currentDeviceId ?? '';
           final incomingDeviceId = v.incomingDeviceId ?? '';
 
-          await repo.receiveChanges(userId, currentDeviceId, [
+          await repo.receiveChanges(userId, userId, currentDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,
@@ -639,7 +645,7 @@ void main() {
             ),
           ]);
           final applied =
-              await repo.receiveChanges(userId, incomingDeviceId, [
+              await repo.receiveChanges(userId, userId, incomingDeviceId, [
             SyncChange(
               entityType: 'plant',
               entityId: entityId,
