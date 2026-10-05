@@ -6,11 +6,12 @@
 //   DATABASE_URL=postgresql://polypodium:<pw>@localhost/polypodium dart test test/features/sync/sync_repository_test.dart
 // Skips (rather than fails) if no Postgres is reachable, so `dart test`
 // still runs clean in environments without one configured.
+import 'package:polypodium_core/lww_vectors.dart';
+import 'package:polypodium_core/polypodium_core.dart';
 import 'package:postgres/postgres.dart';
 import 'package:test/test.dart';
 
 import 'package:polypodium_server/database/db.dart';
-import 'package:polypodium_server/features/sync/mat_change_model.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
 
 void main() {
@@ -71,7 +72,7 @@ void main() {
       // Newer edit applied first, older edit arrives second (out-of-order
       // delivery) -- the older one must lose despite arriving later.
       final appliedNewer = await repo.receiveChanges(userId, deviceId, [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: 'p1',
           payload: {'name': 'v2-newer'},
@@ -81,7 +82,7 @@ void main() {
         ),
       ]);
       final appliedOlder = await repo.receiveChanges(userId, deviceId, [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: 'p1',
           payload: {'name': 'v1-older'},
@@ -123,7 +124,7 @@ void main() {
 
       const sharedEntityId = 'colliding-uuid';
       await repo.receiveChanges(userA, deviceA, [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
           payload: {'name': 'user-a-plant'},
@@ -133,7 +134,7 @@ void main() {
         ),
       ]);
       await repo.receiveChanges(userB, deviceB, [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: sharedEntityId,
           payload: {'name': 'user-b-plant'},
@@ -167,7 +168,7 @@ void main() {
       await _makeDevice(db, userId, deviceId);
 
       final applied = await repo.receiveChanges(userId, deviceId, [
-        MatChange(
+        SyncChange(
           entityType: 'defensivo',
           entityId: 'd1',
           payload: {'name': 'Calda bordalesa', 'category': 'fungicide'},
@@ -201,7 +202,7 @@ void main() {
       await _makeDevice(db, userId, deviceId);
 
       await repo.receiveChanges(userId, deviceId, [
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: 'p-new',
           payload: {
@@ -213,7 +214,7 @@ void main() {
           deviceId: deviceId,
           rev: 0,
         ),
-        MatChange(
+        SyncChange(
           entityType: 'plant',
           entityId: 'p-old',
           payload: {'nickname': 'Cliente antigo'},
@@ -249,7 +250,7 @@ void main() {
       await _makeDevice(db, userId, deviceId);
 
       final applied = await repo.receiveChanges(userId, deviceId, [
-        MatChange(
+        SyncChange(
           entityType: 'reminder',
           entityId: 'r1',
           payload: {
@@ -272,6 +273,62 @@ void main() {
       expect(reminder.entityType, 'reminder');
       expect(reminder.payload['entryType'], 'fertilizer');
       expect(reminder.payload['intervalDays'], 30);
+    });
+
+    // The ON CONFLICT clause can't call incomingWins() directly, so the
+    // package's shared vectors pin the SQL to it instead.
+    group('ON CONFLICT clause agrees with incomingWins on lwwVectors', () {
+      for (final (i, v) in lwwVectors.indexed) {
+        test(v.description, () async {
+          final db = pool;
+          if (db == null) {
+            markTestSkipped('no reachable Postgres (set DATABASE_URL)');
+            return;
+          }
+
+          final repo = SyncRepository(db);
+          final userId = await _makeUser(db);
+          addTearDown(() => db
+              .execute(Sql.named('DELETE FROM users WHERE id = @id'),
+                  parameters: {'id': userId}));
+          final entityId = 'lww-vector-$i';
+
+          await repo.receiveChanges(userId, v.currentDeviceId, [
+            SyncChange(
+              entityType: 'plant',
+              entityId: entityId,
+              payload: {'name': 'current'},
+              updatedAt: v.currentUpdatedAt,
+              deviceId: v.currentDeviceId,
+              rev: 0,
+            ),
+          ]);
+          final applied =
+              await repo.receiveChanges(userId, v.incomingDeviceId, [
+            SyncChange(
+              entityType: 'plant',
+              entityId: entityId,
+              payload: {'name': 'incoming'},
+              updatedAt: v.incomingUpdatedAt,
+              deviceId: v.incomingDeviceId,
+              rev: 0,
+            ),
+          ]);
+
+          final expected = incomingWins(
+            incomingUpdatedAt: v.incomingUpdatedAt,
+            incomingDeviceId: v.incomingDeviceId,
+            currentUpdatedAt: v.currentUpdatedAt,
+            currentDeviceId: v.currentDeviceId,
+          );
+          expect(expected, v.incomingWins);
+          expect(applied, expected ? 1 : 0);
+
+          final result = await repo.serveChanges(userId, since: 0, limit: 10);
+          expect(result.changes.single.payload['name'],
+              expected ? 'incoming' : 'current');
+        });
+      }
     });
   });
 }

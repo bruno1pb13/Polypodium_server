@@ -1,9 +1,9 @@
 import 'dart:convert';
 
+import 'package:polypodium_core/polypodium_core.dart';
 import 'package:postgres/postgres.dart';
 
 import 'i_sync_repository.dart';
-import 'mat_change_model.dart';
 
 const _matTable = {
   'species': 'mat_species',
@@ -32,12 +32,12 @@ class SyncRepository implements ISyncRepository {
   final Pool _db;
 
   @override
-  Future<({List<MatChange> changes, bool hasMore})> serveChanges(
+  Future<({List<SyncChange> changes, bool hasMore})> serveChanges(
     String userId, {
     required int since,
     required int limit,
   }) async {
-    final candidates = <MatChange>[];
+    final candidates = <SyncChange>[];
 
     for (final entry in _matTable.entries) {
       final result = await _db.execute(
@@ -52,7 +52,7 @@ class SyncRepository implements ISyncRepository {
       );
 
       for (final row in result) {
-        candidates.add(MatChange(
+        candidates.add(SyncChange(
           entityType: entry.key,
           entityId: row[0] as String,
           payload: _decodePayload(row[1]),
@@ -80,7 +80,7 @@ class SyncRepository implements ISyncRepository {
   Future<int> receiveChanges(
     String userId,
     String deviceId,
-    List<MatChange> changes,
+    List<SyncChange> changes,
   ) async {
     var applied = 0;
 
@@ -102,10 +102,9 @@ class SyncRepository implements ISyncRepository {
                   device_id = EXCLUDED.device_id,
                   rev = EXCLUDED.rev
               -- Last-write-wins by actual edit time, not arrival order.
-              -- Must stay term-for-term identical to the comparator in
-              -- Polypodium/lib/core/sync/lww_merge.dart (client side) --
-              -- there's no shared package enforcing this, so a drift here
-              -- would make the two sides converge to different winners.
+              -- SQL form of incomingWins() from package:polypodium_core;
+              -- sync_repository_test.dart runs the package's lwwVectors
+              -- through this clause, so a drift here fails the tests.
               WHERE EXCLUDED.updated_at > $table.updated_at
                  OR (EXCLUDED.updated_at = $table.updated_at
                      AND EXCLUDED.device_id > $table.device_id)

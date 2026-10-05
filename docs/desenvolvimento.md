@@ -88,7 +88,7 @@ As tabelas `mat_*` (`mat_species`, `mat_plants`, `mat_entries`, `mat_locations`,
 - `device_id` — último escritor;
 - `rev` — atribuído da sequência compartilhada `mat_rev_seq` a cada escrita, mantendo uma ordenação monotônica única entre todos os tipos de entidade.
 
-**Last-write-wins:** o `INSERT … ON CONFLICT DO UPDATE` só aplica quando `EXCLUDED.updated_at > atual` (desempate por `device_id`). Esse comparador **precisa permanecer idêntico, termo a termo**, ao de `Polypodium/lib/core/sync/lww_merge.dart` no app — não há pacote compartilhado, apenas lógica espelhada.
+**Last-write-wins:** o `INSERT … ON CONFLICT DO UPDATE` só aplica quando `EXCLUDED.updated_at > atual` (desempate por `device_id`). Essa cláusula é a forma SQL do comparador `incomingWins` do pacote compartilhado [`polypodium_core`](https://github.com/bruno1pb13/polypodium_core), que também fornece ao app o comparador e o modelo de mudança (`SyncChange`). O `sync_repository_test.dart` executa os vetores de teste do pacote (`lwwVectors`) contra o Postgres, então qualquer divergência entre o SQL e o pacote quebra os testes. Mudar a regra é mudar o pacote, gerar uma nova tag e atualizar o `ref` aqui e no app.
 
 `device_cursors` registra o maior `rev` que cada dispositivo confirmou ter puxado (`POST /sync/ack`) — informativo, alimenta o `/sync/status`; a correção do sync não depende dele.
 

@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:polypodium_core/polypodium_core.dart';
 import 'package:shelf/shelf.dart';
 
 import '../../core/config.dart';
 import '../../core/http_utils.dart';
 import 'i_sync_repository.dart';
-import 'mat_change_model.dart';
 
 class SyncHandler {
   const SyncHandler(this._repo);
@@ -55,10 +55,10 @@ class SyncHandler {
       return _error(400, 'too many changes (max 500)');
     }
 
-    final List<MatChange> changes;
+    final List<SyncChange> changes;
     try {
       changes = changesRaw
-          .map((c) => MatChange.fromJson(c as Map<String, dynamic>))
+          .map((c) => SyncChange.fromJson(c as Map<String, dynamic>))
           .toList();
     } catch (_) {
       return _error(400, 'malformed change in batch');
