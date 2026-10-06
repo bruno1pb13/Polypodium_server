@@ -20,6 +20,10 @@ import 'package:polypodium_server/features/gardens/garden_repository.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
+import 'package:polypodium_server/features/weather/weather_handler.dart';
+import 'package:polypodium_server/features/weather/weather_provider.dart';
+import 'package:polypodium_server/features/weather/weather_repository.dart';
+import 'package:polypodium_server/features/weather/weather_service.dart';
 import 'package:polypodium_server/routes/router.dart';
 
 typedef _Res = ({int status, Map<String, dynamic> body});
@@ -59,6 +63,10 @@ void main() {
       admin: AdminHandler(
           authRepo, SettingsRepository(db), DateTime.now(), 'test'),
       gardens: GardenHandler(gardenRepo, authRepo),
+      weather: WeatherHandler(
+          WeatherService(WeatherRepository(db), SettingsRepository(db),
+              OpenMeteoProvider('http://localhost:9')),
+          WeatherRepository(db)),
       gardenRepo: gardenRepo,
       authRepo: authRepo,
       tokens: tokens,

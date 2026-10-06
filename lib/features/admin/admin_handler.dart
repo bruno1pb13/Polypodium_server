@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:bcrypt/bcrypt.dart';
@@ -7,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/config.dart';
 import '../../core/http_utils.dart';
 import '../auth/i_auth_repository.dart';
+import '../weather/weather_service.dart';
 import 'i_settings_repository.dart';
 
 final _uuid = const Uuid();
@@ -15,11 +17,14 @@ const _minPasswordLength = 8;
 
 class AdminHandler {
   const AdminHandler(
-      this._repo, this._settings, this._serverStartedAt, this._version);
+      this._repo, this._settings, this._serverStartedAt, this._version,
+      {WeatherService? weather})
+      : _weather = weather;
   final IAuthRepository _repo;
   final ISettingsRepository _settings;
   final DateTime _serverStartedAt;
   final String _version;
+  final WeatherService? _weather;
 
   /// Any authenticated user can call this — used by the client to decide
   /// whether to show admin UI and whether data export/import is allowed for
@@ -39,6 +44,8 @@ class AdminHandler {
       'canImportData': isAdmin ||
           await _settings.getBool(settingAllowMemberImport,
               defaultValue: true),
+      // Whether GET /weather/locations/<id> serves forecasts.
+      'weatherEnabled': await _weatherEnabled(),
     });
   }
 
@@ -48,21 +55,27 @@ class AdminHandler {
           await _settings.getBool(settingAllowMemberExport, defaultValue: true),
       'allowMemberImport':
           await _settings.getBool(settingAllowMemberImport, defaultValue: true),
+      'weatherEnabled': await _weatherEnabled(),
     });
   }
+
+  Future<bool> _weatherEnabled() async =>
+      await _weather?.isEnabled() ?? false;
 
   Future<Response> updateSettings(Request request) async {
     final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final allowExport = body['allowMemberExport'];
     final allowImport = body['allowMemberImport'];
-    if (allowExport == null && allowImport == null) {
-      return _error(
-          400, 'allowMemberExport or allowMemberImport must be provided');
+    final weatherEnabled = body['weatherEnabled'];
+    if (allowExport == null && allowImport == null && weatherEnabled == null) {
+      return _error(400,
+          'allowMemberExport, allowMemberImport or weatherEnabled must be provided');
     }
     if ((allowExport != null && allowExport is! bool) ||
-        (allowImport != null && allowImport is! bool)) {
-      return _error(
-          400, 'allowMemberExport and allowMemberImport must be booleans');
+        (allowImport != null && allowImport is! bool) ||
+        (weatherEnabled != null && weatherEnabled is! bool)) {
+      return _error(400,
+          'allowMemberExport, allowMemberImport and weatherEnabled must be booleans');
     }
     if (allowExport is bool) {
       await _settings.setBool(settingAllowMemberExport, allowExport);
@@ -70,7 +83,52 @@ class AdminHandler {
     if (allowImport is bool) {
       await _settings.setBool(settingAllowMemberImport, allowImport);
     }
+    if (weatherEnabled is bool) {
+      await _settings.setBool(settingWeatherEnabled, weatherEnabled);
+      // Fetches right away instead of waiting for the next hourly check.
+      final weather = _weather;
+      if (weatherEnabled && weather != null) {
+        unawaited(weather.runOnce().then((_) {}, onError: (Object e) {
+          print('Weather job failed: $e');
+        }));
+      }
+    }
     return getSettings(request);
+  }
+
+  /// Regions the weather job maintains and how their last fetch went.
+  Future<Response> weatherStatus(Request request) async {
+    final weather = _weather;
+    if (weather == null) return _error(404, 'weather not available');
+    final regions = await weather.regions();
+    return _json(200, {
+      'enabled': await weather.isEnabled(),
+      'regions': [
+        for (final r in regions)
+          {
+            'id': r.id,
+            'latitude': r.latitude,
+            'longitude': r.longitude,
+            'timezone': r.timezone,
+            'elevation': r.elevation,
+            'lastFetchedAt': r.lastFetchedAt?.toUtc().toIso8601String(),
+            'lastAttemptAt': r.lastAttemptAt?.toUtc().toIso8601String(),
+            'lastUsedAt': r.lastUsedAt?.toUtc().toIso8601String(),
+            'lastError': r.lastError,
+          }
+      ],
+    });
+  }
+
+  /// Refetches every region in use now, regardless of the daily schedule.
+  Future<Response> weatherRefresh(Request request) async {
+    final weather = _weather;
+    if (weather == null) return _error(404, 'weather not available');
+    if (!await weather.isEnabled()) {
+      return _error(409, 'weather is disabled');
+    }
+    final result = await weather.runOnce(force: true);
+    return _json(200, result.toJson());
   }
 
   Future<Response> status(Request request) async {
