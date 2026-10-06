@@ -34,6 +34,7 @@ Copy `.env.example` to `.env` and fill in the values. Required vars:
 | `ALLOWED_ORIGINS` | CORS: `*` or a comma-separated allowlist (only listed origins are echoed back) |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW` | Optional brute-force limits on `/api/v1/auth/*` (default 20 req / 300 s per IP) |
 | `MAX_JSON_BODY_BYTES` / `MAX_PHOTO_BYTES` | Optional request-body caps (default 1 MB / 15 MB) |
+| `WEATHER_*` | Optional weather tuning (`Config.weatherOptions`; see `.env.example`). The feature itself is toggled by admins at runtime |
 
 ## Architecture
 
@@ -71,6 +72,10 @@ PostgreSQL JSONB is inserted as a plain string with a `::jsonb` cast in the SQL 
 ### Conflict handling
 
 There is no explicit conflict detection/UI — merges are always resolved deterministically by last-write-wins (see comparator above). An older incoming write silently no-ops rather than erroring; the caller's own cursor still advances since delivery succeeded at the transport level regardless of the merge outcome.
+
+### Weather
+
+`WeatherService` (started in `main`) runs hourly while the `weather_enabled` server setting is on. It clusters the coordinates of every live `mat_locations` row (all gardens) into `weather_regions`. A coordinate joins the nearest region whose fixed center is within `clusterRadiusKm`; otherwise it creates a new region centered on itself. The service fetches each region in use from Open-Meteo (`IWeatherProvider`, faked in tests) about once a day, and then `WeatherRepository.housekeeping` thins the data: `weather_hourly` keeps the last few days, `weather_daily` drops whole months past the retention after rolling them into `weather_monthly`, and idle regions are deleted (cascade). A session advisory lock keeps two instances from running the job at once. `GET /weather/locations/<id>` resolves the location within the caller's garden. It never returns region coordinates, because a region can be shared with other accounts' locations.
 
 ### Adding a new entity type
 

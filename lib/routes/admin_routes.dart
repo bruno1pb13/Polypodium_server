@@ -13,6 +13,8 @@ Handler buildAdminHandler(
     ..get('/status', admin.status)
     ..get('/settings', admin.getSettings)
     ..patch('/settings', admin.updateSettings)
+    ..get('/weather', admin.weatherStatus)
+    ..post('/weather/refresh', admin.weatherRefresh)
     ..get('/users', admin.listUsers)
     ..post('/users', admin.createUser)
     ..patch('/users/<id>/role', admin.setRole)

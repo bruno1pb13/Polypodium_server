@@ -12,12 +12,14 @@ import '../features/gardens/garden_handler.dart';
 import '../features/gardens/i_garden_repository.dart';
 import '../features/photos/photo_handler.dart';
 import '../features/sync/sync_handler.dart';
+import '../features/weather/weather_handler.dart';
 import '../middleware/rate_limit_middleware.dart';
 import 'admin_routes.dart';
 import 'auth_routes.dart';
 import 'garden_routes.dart';
 import 'photo_routes.dart';
 import 'sync_routes.dart';
+import 'weather_routes.dart';
 
 Router buildRouter({
   required AuthHandler auth,
@@ -25,6 +27,7 @@ Router buildRouter({
   required PhotoHandler photos,
   required AdminHandler admin,
   required GardenHandler gardens,
+  required WeatherHandler weather,
   required IGardenRepository gardenRepo,
   required IAuthRepository authRepo,
   required ITokenService tokens,
@@ -44,6 +47,8 @@ Router buildRouter({
     ..mount('/api/v1/sync/', buildSyncHandler(sync, tokens, authRepo, gardenRepo))
     ..mount('/api/v1/photos/', buildPhotoHandler(photos, tokens, authRepo, gardenRepo))
     ..mount('/api/v1/gardens', buildGardenHandler(gardens, tokens, authRepo))
+    ..mount('/api/v1/weather/',
+        buildWeatherHandler(weather, tokens, authRepo, gardenRepo))
     ..mount('/api/v1/admin/', buildAdminHandler(admin, tokens, authRepo))
     ..get('/api/v1/health', _health);
 }

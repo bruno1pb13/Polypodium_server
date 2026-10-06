@@ -11,3 +11,8 @@ const settingAllowMemberExport = 'allow_member_export';
 
 /// Whether accounts with role == 'member' may import data into the client.
 const settingAllowMemberImport = 'allow_member_import';
+
+/// Whether the server fetches weather forecasts for locations that have
+/// coordinates. Off by default: when on, region coordinates are sent to the
+/// weather provider.
+const settingWeatherEnabled = 'weather_enabled';

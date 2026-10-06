@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../features/weather/weather_models.dart';
+
 class Config {
   static final String environment = Platform.environment['APP_ENV'] ?? 'development';
   static bool get isDevelopment => environment == 'development';
@@ -58,6 +60,30 @@ class Config {
   static final int maxPhotoBytes =
       int.tryParse(Platform.environment['MAX_PHOTO_BYTES'] ?? '') ??
           15 * 1024 * 1024;
+
+  /// Weather forecasts (enabled by admins at runtime, see
+  /// settingWeatherEnabled). Open-Meteo-compatible endpoint.
+  static final String weatherApiUrl = Platform.environment['WEATHER_API_URL'] ??
+      'https://api.open-meteo.com/v1/forecast';
+
+  static WeatherOptions get weatherOptions {
+    int intVar(String name, int fallback, int min, int max) =>
+        (int.tryParse(Platform.environment[name] ?? '') ?? fallback)
+            .clamp(min, max);
+    return WeatherOptions(
+      clusterRadiusKm: (double.tryParse(
+                  Platform.environment['WEATHER_CLUSTER_KM'] ?? '') ??
+              5)
+          .clamp(0.1, 100),
+      refreshInterval:
+          Duration(hours: intVar('WEATHER_REFRESH_HOURS', 24, 1, 168)),
+      forecastDays: intVar('WEATHER_FORECAST_DAYS', 7, 1, 16),
+      hourlyPastDays: intVar('WEATHER_HOURLY_PAST_DAYS', 2, 0, 92),
+      dailyRetentionDays:
+          intVar('WEATHER_DAILY_RETENTION_DAYS', 365, 7, 3650),
+      regionIdleDays: intVar('WEATHER_REGION_IDLE_DAYS', 30, 1, 3650),
+    );
+  }
 
   /// Returns a human-readable error if the configuration is unsafe to serve in
   /// a non-development environment, or null if it is safe. Called once at

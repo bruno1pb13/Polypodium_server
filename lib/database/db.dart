@@ -149,6 +149,68 @@ Future<void> _runMigrations(Session pool) async {
     )
   '''));
 
+  // Weather forecasts. Nearby locations share a region (one fetch for all
+  // of them); data thins out with age: hourly for the last few days, daily
+  // for about a year, monthly summaries after that. Hours and dates are the
+  // region's local wall-clock values (`timezone`), as the provider returns
+  // them.
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS weather_regions (
+      id              TEXT PRIMARY KEY,
+      latitude        DOUBLE PRECISION NOT NULL,
+      longitude       DOUBLE PRECISION NOT NULL,
+      timezone        TEXT,
+      elevation       DOUBLE PRECISION,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_fetched_at TIMESTAMPTZ,
+      last_attempt_at TIMESTAMPTZ,
+      last_error      TEXT
+    )
+  '''));
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS weather_hourly (
+      region_id                 TEXT NOT NULL REFERENCES weather_regions(id) ON DELETE CASCADE,
+      time                      TIMESTAMP NOT NULL,
+      temperature               DOUBLE PRECISION,
+      humidity                  DOUBLE PRECISION,
+      precipitation             DOUBLE PRECISION,
+      precipitation_probability DOUBLE PRECISION,
+      weather_code              INTEGER,
+      wind_speed                DOUBLE PRECISION,
+      PRIMARY KEY (region_id, time)
+    )
+  '''));
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS weather_daily (
+      region_id                     TEXT NOT NULL REFERENCES weather_regions(id) ON DELETE CASCADE,
+      date                          DATE NOT NULL,
+      weather_code                  INTEGER,
+      temperature_max               DOUBLE PRECISION,
+      temperature_min               DOUBLE PRECISION,
+      precipitation_sum             DOUBLE PRECISION,
+      precipitation_probability_max DOUBLE PRECISION,
+      wind_speed_max                DOUBLE PRECISION,
+      et0                           DOUBLE PRECISION,
+      PRIMARY KEY (region_id, date)
+    )
+  '''));
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS weather_monthly (
+      region_id           TEXT NOT NULL REFERENCES weather_regions(id) ON DELETE CASCADE,
+      month               DATE NOT NULL,
+      days                INTEGER NOT NULL,
+      temperature_max_avg DOUBLE PRECISION,
+      temperature_min_avg DOUBLE PRECISION,
+      temperature_max     DOUBLE PRECISION,
+      temperature_min     DOUBLE PRECISION,
+      precipitation_sum   DOUBLE PRECISION,
+      rainy_days          INTEGER NOT NULL,
+      et0_sum             DOUBLE PRECISION,
+      PRIMARY KEY (region_id, month)
+    )
+  '''));
+
   // Single sequence shared by every mat_* table so `rev` stays one
   // monotonic stream across entity types (mirrors the ordering guarantee
   // the old global sync_events.id sequence gave for free), which keeps

@@ -200,8 +200,49 @@ Além de `GET /admin/me` (dados da própria conta), as rotas abaixo exigem `role
 | `POST /admin/users` | Cria conta (único caminho após a primeira) |
 | `PATCH /admin/users/<id>/role` | Promove/rebaixa admin |
 | `PATCH /admin/users/<id>/status` | Ativa/desativa conta |
+| `GET /admin/weather` | Regiões de previsão do tempo (com coordenadas), última busca e último erro |
+| `POST /admin/weather/refresh` | Busca a previsão de todas as regiões em uso agora (`409` se desligada) |
+
+`GET /admin/settings` traz `allowMemberExport`, `allowMemberImport` e `weatherEnabled`; o `PATCH` aceita qualquer subconjunto deles. `GET /admin/me` traz `weatherEnabled` para qualquer conta.
 
 O app Polypodium expõe tudo isso na tela de administração do servidor.
+
+## Previsão do tempo
+
+Desligada por padrão. Quando um admin liga (`PATCH /admin/settings` com `{"weatherEnabled": true}`), o servidor busca a previsão de todo local (`location`) não excluído que tenha `latitude` e `longitude`, em qualquer jardim, usando o [Open-Meteo](https://open-meteo.com), que é gratuito e não exige chave.
+
+- **Agrupamento:** coordenadas a menos de `WEATHER_CLUSTER_KM` (padrão 5 km) do centro de uma região usam essa região, e cada região gera uma única busca. O centro é a primeira coordenada que criou a região e não muda depois. Só o centro da região é enviado ao provedor.
+- **Frequência:** o servidor verifica a cada hora. Uma região nova é buscada na verificação seguinte; uma região já buscada só é atualizada depois de `WEATHER_REFRESH_HOURS` (padrão 24). Se a busca falha, a próxima tentativa ocorre depois de 1 h.
+- **Retenção (quanto mais recente, mais detalhe):**
+  - **horária:** dos últimos `WEATHER_HOURLY_PAST_DAYS` dias (padrão 2) até o fim da previsão (`WEATHER_FORECAST_DAYS`, padrão 7).
+  - **diária:** cerca de `WEATHER_DAILY_RETENTION_DAYS` dias (padrão 365). Os dados são apagados de mês em mês, nunca no meio de um mês.
+  - **mensal:** resumo de cada mês completo (médias e extremos de temperatura, chuva total, dias com chuva ≥ 1 mm e ET0 total), mantido enquanto a região existir.
+  - Uma região da qual nenhum local se aproxima há `WEATHER_REGION_IDLE_DAYS` dias (padrão 30) é apagada junto com seus dados.
+- Cada busca sobrescreve as horas e os dias que já estavam guardados (sempre inclui pelo menos 2 dias passados). Assim, os dias recentes trazem o dado mais próximo do que realmente aconteceu.
+- Horas e datas estão no fuso local da região (`timezone`), no mesmo formato em que o provedor as envia.
+
+### `GET /weather/locations/<id>?days=<n>&months=<n>`
+
+Autenticada, com escopo de jardim (`X-Polypodium-Garden`, igual ao sync). Devolve a previsão do local `<id>` do jardim:
+
+```json
+{
+  "locationId": "…",
+  "timezone": "America/Sao_Paulo",
+  "elevation": 737.0,
+  "fetchedAt": "2026-10-06T12:00:03.000Z",
+  "hourly":  [{ "time": "2026-10-06T13:00", "temperature": 23.1, "humidity": 60, "precipitation": 0.0, "precipitationProbability": 10, "weatherCode": 2, "windSpeed": 9.4 }],
+  "daily":   [{ "date": "2026-10-06", "weatherCode": 95, "temperatureMax": 23.6, "temperatureMin": 16.2, "precipitationSum": 22.9, "precipitationProbabilityMax": 100, "windSpeedMax": 10.1, "et0": 2.2 }],
+  "monthly": [{ "month": "2026-09", "days": 30, "temperatureMaxAvg": 25.1, "temperatureMinAvg": 14.0, "temperatureMax": 31.2, "temperatureMin": 9.8, "precipitationSum": 88.4, "rainyDays": 9, "et0Sum": 96.0 }]
+}
+```
+
+- `days` (padrão 7): quantos dias passados incluir em `daily`, além de hoje e da previsão.
+- `months` (padrão 0): quantos meses completos incluir em `monthly`.
+- `weatherCode` segue os códigos WMO; `et0` é a evapotranspiração de referência FAO-56, em mm.
+- Como uma região pode ser compartilhada com locais de outras contas, a resposta nunca inclui as coordenadas dela.
+
+Os erros vêm como `404` com um campo `code`: `weather_disabled`, `location_not_found` (inclui local excluído ou de outro jardim), `no_coordinates` ou `weather_pending` (ainda não houve busca para a região; tente depois).
 
 ## Saúde
 

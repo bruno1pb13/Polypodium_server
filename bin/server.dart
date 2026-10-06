@@ -15,6 +15,10 @@ import 'package:polypodium_server/features/gardens/garden_repository.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
+import 'package:polypodium_server/features/weather/weather_handler.dart';
+import 'package:polypodium_server/features/weather/weather_provider.dart';
+import 'package:polypodium_server/features/weather/weather_repository.dart';
+import 'package:polypodium_server/features/weather/weather_service.dart';
 import 'package:polypodium_server/middleware/cors_middleware.dart';
 import 'package:polypodium_server/middleware/error_middleware.dart';
 import 'package:polypodium_server/routes/router.dart';
@@ -38,14 +42,24 @@ void main() async {
   final tokens = JwtTokenService(Config.jwtSecret);
   final authRepo = AuthRepository(pool);
   final gardenRepo = GardenRepository(pool);
+  final settingsRepo = SettingsRepository(pool);
+  final weatherRepo = WeatherRepository(pool);
+  final weather = WeatherService(
+    weatherRepo,
+    settingsRepo,
+    OpenMeteoProvider(Config.weatherApiUrl),
+    options: Config.weatherOptions,
+  )..start();
   final serverStartedAt = DateTime.now();
   final router = buildRouter(
     auth: AuthHandler(authRepo, tokens),
     sync: SyncHandler(SyncRepository(pool)),
     photos: PhotoHandler(Config.photosDir),
     admin: AdminHandler(
-        authRepo, SettingsRepository(pool), serverStartedAt, _serverVersion),
+        authRepo, settingsRepo, serverStartedAt, _serverVersion,
+        weather: weather),
     gardens: GardenHandler(gardenRepo, authRepo),
+    weather: WeatherHandler(weather, weatherRepo),
     gardenRepo: gardenRepo,
     authRepo: authRepo,
     tokens: tokens,
