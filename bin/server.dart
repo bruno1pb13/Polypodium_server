@@ -7,6 +7,7 @@ import 'package:polypodium_server/core/config.dart';
 import 'package:polypodium_server/core/token_service.dart';
 import 'package:polypodium_server/database/db.dart';
 import 'package:polypodium_server/features/admin/admin_handler.dart';
+import 'package:polypodium_server/features/admin/release_checker.dart';
 import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/admin/settings_repository.dart';
@@ -24,7 +25,10 @@ import 'package:polypodium_server/middleware/error_middleware.dart';
 import 'package:polypodium_server/routes/router.dart';
 import 'package:polypodium_server/server/ssl.dart';
 
-const _serverVersion = '1.0.0';
+/// Set by the Docker build (`--build-arg SERVER_VERSION`): the release tag,
+/// or `git describe` output for images built from main.
+const _serverVersion =
+    String.fromEnvironment('SERVER_VERSION', defaultValue: 'dev');
 
 void main() async {
   final configError = Config.validate();
@@ -50,6 +54,8 @@ void main() async {
     OpenMeteoProvider(Config.weatherApiUrl),
     options: Config.weatherOptions,
   )..start();
+  final releases = ReleaseChecker(_serverVersion);
+  if (Config.updateCheckEnabled) releases.start();
   final serverStartedAt = DateTime.now();
   final router = buildRouter(
     auth: AuthHandler(authRepo, tokens),
@@ -57,7 +63,7 @@ void main() async {
     photos: PhotoHandler(Config.photosDir),
     admin: AdminHandler(
         authRepo, settingsRepo, serverStartedAt, _serverVersion,
-        weather: weather),
+        weather: weather, releases: releases),
     gardens: GardenHandler(gardenRepo, authRepo),
     weather: WeatherHandler(weather, weatherRepo),
     gardenRepo: gardenRepo,

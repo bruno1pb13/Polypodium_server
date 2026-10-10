@@ -10,6 +10,7 @@ import '../../core/http_utils.dart';
 import '../auth/i_auth_repository.dart';
 import '../weather/weather_service.dart';
 import 'i_settings_repository.dart';
+import 'release_checker.dart';
 
 final _uuid = const Uuid();
 
@@ -18,13 +19,15 @@ const _minPasswordLength = 8;
 class AdminHandler {
   const AdminHandler(
       this._repo, this._settings, this._serverStartedAt, this._version,
-      {WeatherService? weather})
-      : _weather = weather;
+      {WeatherService? weather, ReleaseChecker? releases})
+      : _weather = weather,
+        _releases = releases;
   final IAuthRepository _repo;
   final ISettingsRepository _settings;
   final DateTime _serverStartedAt;
   final String _version;
   final WeatherService? _weather;
+  final ReleaseChecker? _releases;
 
   /// Any authenticated user can call this — used by the client to decide
   /// whether to show admin UI and whether data export/import is allowed for
@@ -139,6 +142,11 @@ class AdminHandler {
       'uptimeSeconds': uptimeSeconds,
       'version': _version,
       'userCount': userCount,
+      // Informational only: the newest published release (null until a
+      // check succeeds or when checks are off) and whether this server is
+      // behind it. Updating the deployment is up to the operator.
+      'latestVersion': _releases?.latestVersion,
+      'updateAvailable': _releases?.updateAvailable ?? false,
     });
   }
 

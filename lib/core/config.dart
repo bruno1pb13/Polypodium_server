@@ -61,6 +61,11 @@ class Config {
       int.tryParse(Platform.environment['MAX_PHOTO_BYTES'] ?? '') ??
           15 * 1024 * 1024;
 
+  /// Whether to poll GitHub for newer server releases and tell admins
+  /// (`UPDATE_CHECK=false` turns it off, e.g. on air-gapped hosts).
+  static final bool updateCheckEnabled =
+      (Platform.environment['UPDATE_CHECK'] ?? 'true') != 'false';
+
   /// Weather forecasts (enabled by admins at runtime, see
   /// settingWeatherEnabled). Open-Meteo-compatible endpoint.
   static final String weatherApiUrl = Platform.environment['WEATHER_API_URL'] ??

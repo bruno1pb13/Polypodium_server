@@ -5,7 +5,10 @@ COPY pubspec.yaml pubspec.lock* ./
 RUN dart pub get
 
 COPY . .
-RUN dart compile exe bin/server.dart -o /server
+# Release tag (or `git describe` for main builds), shown to admins and
+# compared with the newest release to tell them the server is outdated.
+ARG SERVER_VERSION=dev
+RUN dart compile exe -DSERVER_VERSION=${SERVER_VERSION} bin/server.dart -o /server
 
 # Minimal runtime image
 FROM debian:bookworm-slim

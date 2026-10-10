@@ -34,6 +34,7 @@ Copy `.env.example` to `.env` and fill in the values. Required vars:
 | `ALLOWED_ORIGINS` | CORS: `*` or a comma-separated allowlist (only listed origins are echoed back) |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW` | Optional brute-force limits on `/api/v1/auth/*` (default 20 req / 300 s per IP) |
 | `MAX_JSON_BODY_BYTES` / `MAX_PHOTO_BYTES` | Optional request-body caps (default 1 MB / 15 MB) |
+| `UPDATE_CHECK` | Optional, default `true`. `false` stops the twice-daily GitHub release check behind the admin update notice |
 | `WEATHER_*` | Optional weather tuning (`Config.weatherOptions`; see `.env.example`). The feature itself is toggled by admins at runtime |
 
 ## Architecture
@@ -76,6 +77,10 @@ There is no explicit conflict detection/UI — merges are always resolved determ
 ### Weather
 
 `WeatherService` (started in `main`) runs hourly while the `weather_enabled` server setting is on. It clusters the coordinates of every live `mat_locations` row (all gardens) into `weather_regions`. A coordinate joins the nearest region whose fixed center is within `clusterRadiusKm`; otherwise it creates a new region centered on itself. The service fetches each region in use from Open-Meteo (`IWeatherProvider`, faked in tests) about once a day, and then `WeatherRepository.housekeeping` thins the data: `weather_hourly` keeps the last few days, `weather_daily` drops whole months past the retention after rolling them into `weather_monthly`, and idle regions are deleted (cascade). A session advisory lock keeps two instances from running the job at once. `GET /weather/locations/<id>` resolves the location within the caller's garden. It never returns region coordinates, because a region can be shared with other accounts' locations.
+
+### Server version and update notice
+
+The binary's version comes from `--build-arg SERVER_VERSION` (Dockerfile → `-DSERVER_VERSION`): the tag on release images, `git describe` (`2.8.0-3-gabc1234`) on `:latest` builds from main, `dev` locally. `ReleaseChecker` (started in `main` unless `UPDATE_CHECK=false`) polls GitHub's latest release every 12 h and `GET /admin/status` returns `latestVersion` and `updateAvailable`. It's informational only; the app shows admins a notice and never offers to update. A `dev` build is never reported as behind.
 
 ### Adding a new entity type
 
