@@ -10,6 +10,7 @@ Servidor de sincronização self-hosted para o app [Polypodium](https://github.c
 - **Multiusuário** — contas com login (JWT), a primeira conta vira admin e cria as demais.
 - **Last-write-wins** — conflitos entre aparelhos são resolvidos de forma determinística, sem intervenção.
 - **Tudo incluso** — dados, fotos e painel de administração pelo próprio app.
+- **Acesso por IA (MCP)** — opcional e desligado por padrão: assistentes como Claude e Cursor consultam e editam um jardim, inclusive vendo as fotos das plantas.
 
 ## Começar rápido
 
@@ -23,6 +24,23 @@ curl http://localhost:8080/api/v1/health   # → {"status":"ok"}
 Depois é só apontar o app (Configurações → Servidor) para a URL e criar a primeira conta.
 
 O [guia de instalação](docs/deploy.md) cobre o passo a passo completo: HTTPS com Let's Encrypt, criação do primeiro admin, backups e atualização.
+
+## Acesso por IA (MCP)
+
+O servidor inclui um servidor [MCP](https://modelcontextprotocol.io). Com ele, assistentes de IA leem um jardim (plantas, diário, fotos, catálogos e previsão do tempo) e, se você permitir, registram regas e criam ou editam plantas. As mudanças chegam aos aparelhos no próximo sync, como as de qualquer outro aparelho.
+
+1. **Ligar:** o MCP vem desligado. Um admin liga em *Administração do servidor → Acesso por IA (MCP)*, no app, ou com `PATCH /api/v1/admin/settings` e `{"mcpEnabled": true}`.
+2. **Criar um token:** no app, abra o menu do workspace → *Acesso por IA (MCP)* → *Novo token*. Cada token dá acesso a um único jardim, como somente leitura ou com alterações. Ele aparece uma vez só.
+3. **Conectar o assistente:** o endpoint é `https://seu-servidor/api/v1/mcp`, com o header `Authorization: Bearer pmcp_…`. No Claude Code:
+
+   ```bash
+   claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
+     --header "Authorization: Bearer pmcp_…"
+   ```
+
+   No Claude Desktop, configure via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) no `claude_desktop_config.json`. Os conectores do claude.ai exigem OAuth, que o servidor ainda não oferece.
+
+A lista de ferramentas e os detalhes estão em [API → MCP](docs/api.md#mcp).
 
 ## Documentação
 

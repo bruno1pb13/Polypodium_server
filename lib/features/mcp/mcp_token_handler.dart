@@ -4,6 +4,7 @@ import 'package:shelf/shelf.dart';
 
 import '../../core/config.dart';
 import '../../core/http_utils.dart';
+import '../admin/i_settings_repository.dart';
 import '../gardens/i_garden_repository.dart';
 import 'i_mcp_token_repository.dart';
 
@@ -13,11 +14,16 @@ const _maxTokensPerMember = 20;
 /// `/gardens/<id>/mcp-tokens`: the tokens an MCP client connects to one
 /// garden with. Any member creates and revokes their own; the owner sees
 /// and revokes everyone's. A garden the caller doesn't belong to answers
-/// 404, like the rest of `/gardens`.
+/// 404, like the rest of `/gardens`. While admins keep MCP off, tokens
+/// can't be created but can still be listed and revoked.
 class McpTokenHandler {
-  const McpTokenHandler(this._tokens, this._gardens);
+  const McpTokenHandler(this._tokens, this._gardens, this._settings);
   final IMcpTokenRepository _tokens;
   final IGardenRepository _gardens;
+  final ISettingsRepository _settings;
+
+  Future<bool> _enabled() =>
+      _settings.getBool(settingMcpEnabled, defaultValue: false);
 
   Future<Response> list(Request request, String gardenId) async {
     final userId = request.context['userId'] as String;
@@ -25,7 +31,7 @@ class McpTokenHandler {
     if (role == null) return _gardenNotFound();
     final tokens = await _tokens.list(gardenId,
         userId: role == 'owner' ? null : userId);
-    return _json(200, {'tokens': tokens});
+    return _json(200, {'enabled': await _enabled(), 'tokens': tokens});
   }
 
   /// Body: `{"name": String, "canWrite": bool?}`. The secret is only in this
@@ -34,6 +40,12 @@ class McpTokenHandler {
     final userId = request.context['userId'] as String;
     if (await _gardens.memberRole(gardenId, userId) == null) {
       return _gardenNotFound();
+    }
+    if (!await _enabled()) {
+      return _json(403, {
+        'error': 'MCP is disabled on this server',
+        'code': 'mcp_disabled',
+      });
     }
     final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final name = body['name'];

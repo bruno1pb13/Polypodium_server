@@ -49,6 +49,8 @@ class AdminHandler {
               defaultValue: true),
       // Whether GET /weather/locations/<id> serves forecasts.
       'weatherEnabled': await _weatherEnabled(),
+      // Whether /mcp answers and MCP tokens can be created.
+      'mcpEnabled': await _mcpEnabled(),
     });
   }
 
@@ -59,26 +61,33 @@ class AdminHandler {
       'allowMemberImport':
           await _settings.getBool(settingAllowMemberImport, defaultValue: true),
       'weatherEnabled': await _weatherEnabled(),
+      'mcpEnabled': await _mcpEnabled(),
     });
   }
 
   Future<bool> _weatherEnabled() async =>
       await _weather?.isEnabled() ?? false;
 
+  Future<bool> _mcpEnabled() =>
+      _settings.getBool(settingMcpEnabled, defaultValue: false);
+
   Future<Response> updateSettings(Request request) async {
     final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
     final allowExport = body['allowMemberExport'];
     final allowImport = body['allowMemberImport'];
     final weatherEnabled = body['weatherEnabled'];
-    if (allowExport == null && allowImport == null && weatherEnabled == null) {
+    final mcpEnabled = body['mcpEnabled'];
+    final values = [allowExport, allowImport, weatherEnabled, mcpEnabled];
+    if (values.every((v) => v == null)) {
       return _error(400,
-          'allowMemberExport, allowMemberImport or weatherEnabled must be provided');
+          'allowMemberExport, allowMemberImport, weatherEnabled or mcpEnabled must be provided');
     }
-    if ((allowExport != null && allowExport is! bool) ||
-        (allowImport != null && allowImport is! bool) ||
-        (weatherEnabled != null && weatherEnabled is! bool)) {
+    if (values.any((v) => v != null && v is! bool)) {
       return _error(400,
-          'allowMemberExport, allowMemberImport and weatherEnabled must be booleans');
+          'allowMemberExport, allowMemberImport, weatherEnabled and mcpEnabled must be booleans');
+    }
+    if (mcpEnabled is bool) {
+      await _settings.setBool(settingMcpEnabled, mcpEnabled);
     }
     if (allowExport is bool) {
       await _settings.setBool(settingAllowMemberExport, allowExport);

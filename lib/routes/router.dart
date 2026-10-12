@@ -6,6 +6,7 @@ import 'package:shelf_router/shelf_router.dart';
 import '../core/config.dart';
 import '../core/token_service.dart';
 import '../features/admin/admin_handler.dart';
+import '../features/admin/i_settings_repository.dart';
 import '../features/auth/auth_handler.dart';
 import '../features/auth/i_auth_repository.dart';
 import '../features/gardens/garden_handler.dart';
@@ -35,6 +36,7 @@ Router buildRouter({
   required McpHandler mcp,
   required McpTokenHandler mcpTokens,
   required IMcpTokenRepository mcpTokenRepo,
+  required ISettingsRepository settings,
   required IGardenRepository gardenRepo,
   required IAuthRepository authRepo,
   required ITokenService tokens,
@@ -57,7 +59,7 @@ Router buildRouter({
     ..mount('/api/v1/weather/',
         buildWeatherHandler(weather, tokens, authRepo, gardenRepo))
     ..mount('/api/v1/admin/', buildAdminHandler(admin, tokens, authRepo))
-    ..mount('/api/v1/mcp', buildMcpHandler(mcp, mcpTokenRepo))
+    ..mount('/api/v1/mcp', buildMcpHandler(mcp, mcpTokenRepo, settings))
     ..get('/api/v1/health', _health);
 }
 
