@@ -18,6 +18,21 @@ class McpToolError implements Exception {
   String toString() => message;
 }
 
+/// An image sent back to the model as MCP `image` content.
+class McpImage {
+  const McpImage(this.bytes, this.mimeType);
+  final List<int> bytes;
+  final String mimeType;
+}
+
+/// What a tool returns: JSON (sent as `structuredContent` and as text) and
+/// any images, which follow the text in `content`.
+class McpToolResult {
+  const McpToolResult(this.data, {this.images = const []});
+  final Map<String, Object?> data;
+  final List<McpImage> images;
+}
+
 class McpTool {
   const McpTool({
     required this.name,
@@ -41,8 +56,7 @@ class McpTool {
   final bool writes;
   final bool destructive;
 
-  /// Returns the JSON result (sent as `structuredContent` and as text).
-  final Future<Map<String, Object?>> Function(
+  final Future<McpToolResult> Function(
       McpGrant grant, Map<String, Object?> args) run;
 
   bool availableTo(McpGrant grant) => !writes || grant.canWrite;
@@ -142,9 +156,15 @@ class McpServer {
       final result = await tool.run(grant, args);
       return _result(id, {
         'content': [
-          {'type': 'text', 'text': jsonEncode(result)},
+          {'type': 'text', 'text': jsonEncode(result.data)},
+          for (final image in result.images)
+            {
+              'type': 'image',
+              'data': base64Encode(image.bytes),
+              'mimeType': image.mimeType,
+            },
         ],
-        'structuredContent': result,
+        'structuredContent': result.data,
         'isError': false,
       });
     } on McpToolError catch (e) {

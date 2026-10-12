@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:bcrypt/bcrypt.dart';
+import 'package:image/image.dart' as img;
 import 'package:postgres/postgres.dart';
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
@@ -22,6 +23,7 @@ import 'package:polypodium_server/features/mcp/mcp_handler.dart';
 import 'package:polypodium_server/features/mcp/mcp_server.dart';
 import 'package:polypodium_server/features/mcp/mcp_token_handler.dart';
 import 'package:polypodium_server/features/mcp/mcp_token_repository.dart';
+import 'package:polypodium_server/features/mcp/photo_renderer.dart';
 import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
@@ -74,7 +76,10 @@ void main() {
               OpenMeteoProvider('http://localhost:9')),
           WeatherRepository(db)),
       mcp: McpHandler(McpServer(
-          polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
+          polypodiumTools(
+          store: GardenStore(db),
+          sync: SyncRepository(db),
+          photos: PhotoRenderer(photosDir.path).call),
           version: 'test')),
       mcpTokens: McpTokenHandler(McpTokenRepository(db), gardenRepo),
       mcpTokenRepo: McpTokenRepository(db),
@@ -634,6 +639,84 @@ void main() {
         'arguments': {'plants': ['Basil'], 'type': 'irrigation'},
       });
       expect((denied.body['error'] as Map)['code'], -32602);
+    });
+
+    test('photos synced by a device come back as images', () async {
+      if (skip()) return;
+      final owner = await account();
+      final garden = await createGarden(owner, 'Orquidário');
+      final jpeg = img.encodeJpg(img.Image(width: 1200, height: 800));
+      for (final key in ['e-own.jpg', 'ep-extra.jpg', 'e-new.jpg']) {
+        expect(
+            (await send('PUT', '/photos/$key',
+                    as: owner, garden: garden, body: jpeg))
+                .status,
+            200);
+      }
+      DateTime at(int day) => DateTime.utc(2026, 10, day);
+      await push(owner, [
+        change(owner, 'plant', 'p-orq', {
+          'nickname': 'Orquídea',
+          'speciesId': 'sp',
+          'soilId': 'loamy',
+          'status': 'active',
+          'coverPhotoId': 'ep-extra',
+        }),
+        change(owner, 'entry', 'e-own', {
+          'plantId': 'p-orq',
+          'type': 'observation',
+          'date': '2026-10-01T10:00:00.000',
+          'photoKey': 'e-own.jpg',
+        }, at: at(1)),
+        change(owner, 'entry_photo', 'ep-extra', {
+          'entryId': 'e-own',
+          'photoKey': 'ep-extra.jpg',
+          'position': 0,
+        }, at: at(1)),
+        change(owner, 'entry', 'e-new', {
+          'plantId': 'p-orq',
+          'type': 'observation',
+          'date': '2026-10-05T10:00:00.000',
+          'photoKey': 'e-new.jpg',
+        }, at: at(5)),
+        // Deleted entries' photos are gone for the model too.
+        {
+          ...change(owner, 'entry', 'e-del', {
+            'plantId': 'p-orq',
+            'type': 'observation',
+            'date': '2026-10-06T10:00:00.000',
+            'photoKey': 'e-del.jpg',
+          }, at: at(6)),
+          'deletedAt': at(7).toIso8601String(),
+        },
+      ], garden: garden);
+
+      final secret =
+          (await newToken(owner, garden))['token'] as String;
+
+      final plant = await tool(secret, 'get_plant', {'plant': 'Orquídea'});
+      final data = plant['structuredContent'] as Map;
+      expect(data['photoCount'], 3);
+      expect(data['coverPhoto']['photoId'], 'ep-extra');
+      final image = (plant['content'] as List)[1] as Map;
+      expect(image['type'], 'image');
+      final cover = img.decodeJpg(base64Decode(image['data'] as String))!;
+      expect((cover.width, cover.height), (512, 341));
+
+      final listed = await tool(secret, 'list_plant_photos', {'plant': 'p-orq'});
+      expect(
+          [
+            for (final p in (listed['structuredContent'] as Map)['photos'])
+              p['photoId']
+          ],
+          ['e-new', 'e-own', 'ep-extra']);
+
+      final photos = await tool(secret, 'get_photos', {
+        'photoIds': ['e-new', 'e-del'],
+      });
+      expect((photos['structuredContent'] as Map)['notFound'], ['e-del']);
+      expect((photos['content'] as List).where((c) => c['type'] == 'image'),
+          hasLength(1));
     });
 
     test('tokens are listed, revoked and die with the membership', () async {

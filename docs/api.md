@@ -290,8 +290,10 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 |---|---|
 | `garden_overview` | Contagens, plantas com rega vencida, reaplicação de defensivo vencida, últimos registros |
 | `list_plants` | Plantas com espécie, local, vaso e estado da rega; filtros por texto, status, local, vaso, espécie e `needsWater` |
-| `get_plant` | Detalhes de uma planta: ficha da espécie, solo, lembretes e registros recentes |
-| `list_entries` | Registros do diário, mais recentes primeiro; por planta, tipo e intervalo de dias |
+| `get_plant` | Detalhes de uma planta: ficha da espécie, solo, lembretes, registros recentes, número de fotos e a **foto de capa** como imagem (512 px; `includeCoverImage: false` desliga) |
+| `list_plant_photos` | Fotos de uma planta, das mais novas para as mais antigas, com o registro de cada uma (data, tipo, nota) e qual é a capa |
+| `get_photos` | Até 6 fotos por chamada, como imagens: `small` (512 px), `medium` (1024 px, padrão) ou `large` (1568 px) no lado maior |
+| `list_entries` | Registros do diário, mais recentes primeiro; por planta, tipo e intervalo de dias (`hasPhoto` diz se o registro tem foto) |
 | `list_species`, `list_locations`, `list_pots`, `list_soils`, `list_defensivos` | Catálogos |
 | `get_weather` | Previsão de um local (quando o admin ligou a previsão do tempo) |
 | `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso |
@@ -302,6 +304,8 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 ✎ = só aparece para tokens com `canWrite: true`.
 
 Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
+
+**Fotos:** vêm dos arquivos que o sync já guarda (`photoKey` de `entry` e `entry_photo`). Como no app, as fotos extras só contam para um registro que tem foto própria, e a capa é a escolhida na planta (`coverPhotoId`) ou, sem escolha, a foto própria do registro mais recente. O servidor reduz cada foto e a envia em JPEG como conteúdo `image` do MCP, porque os originais podem ter até 15 MB. A redução roda fora do loop de requisições, com no máximo 2 fotos por vez, e as 48 mais recentes ficam em cache na memória.
 
 **Escritas:** o MCP grava pelo mesmo caminho do `POST /sync/receive` (LWW), como mais um dispositivo, com `deviceId` `mcp-<tokenId>`, e no mesmo formato de payload do app. Os aparelhos recebem as mudanças no próximo pull. Referências (espécie, solo, local, vaso, planta) são validadas antes de gravar. Datas só com o dia (`2026-10-12`) viram meio-dia daquele dia, sem fuso, para não mudarem de dia em nenhum fuso horário. Ao excluir um registro de rega ou de defensivo, o servidor também recalcula a última rega/aplicação da planta, porque o app só faz esse recálculo quando recebe um registro novo.
 
