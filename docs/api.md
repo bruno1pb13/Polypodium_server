@@ -203,7 +203,7 @@ Além de `GET /admin/me` (dados da própria conta), as rotas abaixo exigem `role
 | `GET /admin/weather` | Regiões de previsão do tempo (com coordenadas), última busca e último erro |
 | `POST /admin/weather/refresh` | Busca a previsão de todas as regiões em uso agora (`409` se desligada) |
 
-`GET /admin/settings` traz `allowMemberExport`, `allowMemberImport` e `weatherEnabled`; o `PATCH` aceita qualquer subconjunto deles. `GET /admin/me` traz `weatherEnabled` para qualquer conta.
+`GET /admin/settings` traz `allowMemberExport`, `allowMemberImport`, `weatherEnabled` e `mcpEnabled`; o `PATCH` aceita qualquer subconjunto deles. `GET /admin/me` traz `weatherEnabled` e `mcpEnabled` para qualquer conta.
 
 O app Polypodium expõe tudo isso na tela de administração do servidor.
 
@@ -248,6 +248,12 @@ Os erros vêm como `404` com um campo `code`: `weather_disabled`, `location_not_
 
 O servidor expõe um servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) para que assistentes de IA (Claude Code, Claude Desktop, Cursor…) consultem e editem um jardim. **A conexão é por jardim:** cada token MCP pertence a um único jardim e a quem o criou, e o token sozinho define o jardim — não há `X-Polypodium-Garden`.
 
+**Desligado por padrão.** Um admin liga com `PATCH /admin/settings` e `{"mcpEnabled": true}`, ou pela tela de administração do app. Enquanto está desligado:
+
+- `/mcp` responde `404` com `"code": "mcp_disabled"`, mesmo para tokens válidos.
+- `POST /gardens/<id>/mcp-tokens` responde `403` com `"code": "mcp_disabled"`.
+- Listar e revogar tokens continua funcionando. Os tokens existentes voltam a valer quando o MCP é religado.
+
 ### Tokens
 
 Criados pelo próprio membro, com o JWT do app. Valem até serem revogados; deixam de valer na hora se a conta for desativada/removida ou sair do jardim. O servidor só guarda o hash (SHA-256) do segredo.
@@ -257,13 +263,13 @@ Criados pelo próprio membro, com o JWT do app. Valem até serem revogados; deix
 Qualquer membro vê os próprios tokens; o dono vê os de todos. O segredo nunca aparece aqui.
 
 ```json
-{ "tokens": [
+{ "enabled": true, "tokens": [
   { "id": "…", "name": "Claude Desktop", "tokenPrefix": "pmcp_Eggl_L", "canWrite": true,
     "createdAt": "…", "lastUsedAt": "…", "userId": "…", "email": "voce@exemplo.com" }
 ] }
 ```
 
-`lastUsedAt` é atualizado no máximo uma vez por minuto.
+`enabled` diz se o MCP está ligado no servidor. `lastUsedAt` é atualizado no máximo uma vez por minuto.
 
 #### `POST /gardens/<id>/mcp-tokens`
 

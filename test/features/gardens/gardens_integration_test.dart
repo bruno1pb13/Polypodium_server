@@ -13,6 +13,7 @@ import 'package:test/test.dart';
 import 'package:polypodium_server/core/token_service.dart';
 import 'package:polypodium_server/database/db.dart';
 import 'package:polypodium_server/features/admin/admin_handler.dart';
+import 'package:polypodium_server/features/admin/i_settings_repository.dart';
 import 'package:polypodium_server/features/admin/settings_repository.dart';
 import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
@@ -81,8 +82,10 @@ void main() {
           sync: SyncRepository(db),
           photos: PhotoRenderer(photosDir.path).call),
           version: 'test')),
-      mcpTokens: McpTokenHandler(McpTokenRepository(db), gardenRepo),
+      mcpTokens: McpTokenHandler(
+          McpTokenRepository(db), gardenRepo, SettingsRepository(db)),
       mcpTokenRepo: McpTokenRepository(db),
+      settings: SettingsRepository(db),
       gardenRepo: gardenRepo,
       authRepo: authRepo,
       tokens: tokens,
@@ -536,6 +539,16 @@ void main() {
   });
 
   group('MCP', () {
+    Future<void> setMcpEnabled(bool on) =>
+        SettingsRepository(pool!).setBool(settingMcpEnabled, on);
+
+    setUp(() async {
+      if (pool != null) await setMcpEnabled(true);
+    });
+    tearDown(() async {
+      if (pool != null) await setMcpEnabled(false);
+    });
+
     Future<_Res> mcp(String token, String method,
         [Map<String, Object?>? params]) async {
       final res = await app(Request(
@@ -717,6 +730,37 @@ void main() {
       expect((photos['structuredContent'] as Map)['notFound'], ['e-del']);
       expect((photos['content'] as List).where((c) => c['type'] == 'image'),
           hasLength(1));
+    });
+
+    test('off by default: no endpoint and no new tokens', () async {
+      if (skip()) return;
+      final owner = await account();
+      final garden = await createGarden(owner, 'Desligado');
+      final token = await newToken(owner, garden);
+
+      await setMcpEnabled(false);
+      expect((await mcp(token['token'] as String, 'ping')).status, 404);
+      final create = await send('POST', '/gardens/$garden/mcp-tokens',
+          as: owner, body: {'name': 'x'});
+      expect(create.status, 403);
+      expect(create.body['code'], 'mcp_disabled');
+      // Existing tokens can still be seen and revoked.
+      final listed =
+          await send('GET', '/gardens/$garden/mcp-tokens', as: owner);
+      expect(listed.body['enabled'], false);
+      expect(listed.body['tokens'] as List, hasLength(1));
+      expect(
+          (await send('DELETE', '/gardens/$garden/mcp-tokens/${token['id']}',
+                  as: owner))
+              .status,
+          200);
+
+      final me = await send('GET', '/admin/me', as: owner);
+      expect(me.body['mcpEnabled'], false);
+
+      await setMcpEnabled(true);
+      expect((await send('GET', '/admin/me', as: owner)).body['mcpEnabled'],
+          true);
     });
 
     test('tokens are listed, revoked and die with the membership', () async {

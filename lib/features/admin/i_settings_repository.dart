@@ -16,3 +16,8 @@ const settingAllowMemberImport = 'allow_member_import';
 /// coordinates. Off by default: when on, region coordinates are sent to the
 /// weather provider.
 const settingWeatherEnabled = 'weather_enabled';
+
+/// Whether the MCP endpoint (`/mcp`) answers and members may create MCP
+/// tokens. Off by default: when on, AI assistants holding a token read (and,
+/// with a write token, change) the token's garden.
+const settingMcpEnabled = 'mcp_enabled';

@@ -136,6 +136,13 @@ curl -X POST https://plantas.seudominio.com/api/v1/auth/register \
 
 Depois faça login normalmente pelo app. As próximas contas você cria pela tela de administração, dentro do próprio app.
 
+### Recursos opcionais
+
+Dois recursos vêm desligados e o admin liga na tela de administração do app (ou por `PATCH /api/v1/admin/settings`):
+
+- **Previsão do tempo** (`weatherEnabled`): envia as coordenadas dos locais (agrupadas por região) ao Open-Meteo.
+- **Acesso por IA / MCP** (`mcpEnabled`): libera o endpoint `/api/v1/mcp`, para que assistentes de IA como Claude ou Cursor consultem e editem um jardim com um token criado pelo membro. Veja [API → MCP](api.md#mcp).
+
 ## 5. Backups
 
 Os dados vivem em dois lugares: o banco PostgreSQL e o volume de fotos.

@@ -145,8 +145,10 @@ void main() {
       mcp: McpHandler(McpServer(
           polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
           version: 'test')),
-      mcpTokens: McpTokenHandler(McpTokenRepository(db), gardenRepo),
+      mcpTokens: McpTokenHandler(
+          McpTokenRepository(db), gardenRepo, SettingsRepository(db)),
       mcpTokenRepo: McpTokenRepository(db),
+      settings: SettingsRepository(db),
       gardenRepo: gardenRepo,
       authRepo: authRepo,
       tokens: tokens,
