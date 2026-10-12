@@ -56,6 +56,12 @@ class Config {
       int.tryParse(Platform.environment['MAX_JSON_BODY_BYTES'] ?? '') ??
           1024 * 1024;
 
+  /// Cap on MCP request bodies, which may carry photos as base64. Default:
+  /// enough for two maximum-size photos.
+  static final int maxMcpBodyBytes =
+      int.tryParse(Platform.environment['MAX_MCP_BODY_BYTES'] ?? '') ??
+          maxJsonBodyBytes + maxPhotoBytes * 8 ~/ 3;
+
   /// Cap on a single photo upload.
   static final int maxPhotoBytes =
       int.tryParse(Platform.environment['MAX_PHOTO_BYTES'] ?? '') ??

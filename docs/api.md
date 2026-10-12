@@ -302,17 +302,23 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 | `list_entries` | Registros do diário, mais recentes primeiro; por planta, tipo e intervalo de dias (`hasPhoto` diz se o registro tem foto) |
 | `list_species`, `list_locations`, `list_pots`, `list_soils`, `list_defensivos` | Catálogos |
 | `get_weather` | Previsão de um local (quando o admin ligou a previsão do tempo) |
-| `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso |
+| `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso, com até 5 fotos (`photos`) |
+| `add_entry_photos` ✎ | Anexa fotos a um registro existente, depois das que ele já tem (máximo de 5 por registro, como no app) |
 | `delete_entry` ✎ | Exclui um registro (e as fotos dele) |
 | `create_plant` ✎, `update_plant` ✎ | Cria/edita planta (nome, status, espécie, solo, local, vaso, frequência de rega) |
+| `create_cutting` ✎ | Cria uma muda de uma planta, como o "Criar muda" do app: guarda a planta-mãe e, se não forem informados, herda espécie, solo e local dela; começa fora de vaso e com a rega padrão da espécie |
+| `repot_plant` ✎ | Replantio de uma ou mais plantas, como no app: um registro `repotting` por planta (diâmetro, material, solo novo, vaso de origem e de destino) e a planta muda de vaso (levando a localização do vaso, se ele tiver) e/ou de solo. `pot: ""` tira a planta do vaso. Aceita fotos |
+| `create_pot` ✎ | Cria vaso, jardineira ou canteiro (tipo, diâmetro, material, local, notas) |
 | `update_species` ✎ | Edita a ficha de uma espécie (nomes, rega padrão, luz, umidade, toxicidade, floração, notas, solos recomendados). Só os campos enviados mudam: `""` limpa um campo e `[]` limpa uma lista |
 | `create_species` ✎, `create_location` ✎ | Cria espécie/local |
 
 ✎ = só aparece para tokens com `canWrite: true`.
 
-Espécies podem ser indicadas pelo id ou pelo nome popular ou científico exato. Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
+Espécies podem ser indicadas pelo id ou pelo nome popular ou científico exato. Vasos, no `repot_plant`, aceitam id, código curto ou nome exato. Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
 
 **Fotos:** vêm dos arquivos que o sync já guarda (`photoKey` de `entry` e `entry_photo`). Como no app, as fotos extras só contam para um registro que tem foto própria, e a capa é a escolhida na planta (`coverPhotoId`) ou, sem escolha, a foto própria do registro mais recente. O servidor reduz cada foto e a envia em JPEG como conteúdo `image` do MCP, porque os originais podem ter até 15 MB. A redução roda fora do loop de requisições, com no máximo 2 fotos por vez, e as 48 mais recentes ficam em cache na memória.
+
+**Enviar fotos:** `add_entry`, `add_entry_photos` e `repot_plant` recebem `photos`, uma lista de `{"url": "https://…"}` ou `{"data": "<base64>"}` (um `data:` URL também serve). O servidor aceita JPEG, PNG, WebP e GIF (reconhecidos pelo conteúdo, não pela extensão), até `MAX_PHOTO_BYTES` cada, e lê todas antes de gravar qualquer coisa: uma foto inválida faz a chamada falhar sem deixar nada pela metade. URLs só são baixadas de endereços públicos, nunca de loopback, rede privada ou link-local, e cada redirecionamento (até 3) é verificado de novo. Os arquivos ficam onde o sync guarda as fotos, com o nome que o app usaria (`<id do registro ou da foto><ext>`): a primeira foto vira a foto própria do registro (`photoKey`) e as demais viram linhas `entry_photo`, e os aparelhos as baixam no próximo pull. Numa chamada para várias plantas, cada registro recebe sua própria cópia. O corpo de uma requisição MCP vai até `MAX_MCP_BODY_BYTES` (padrão: `MAX_JSON_BODY_BYTES` + espaço para duas fotos do tamanho máximo em base64).
 
 **Escritas:** o MCP grava pelo mesmo caminho do `POST /sync/receive` (LWW), como mais um dispositivo, com `deviceId` `mcp-<tokenId>`, e no mesmo formato de payload do app. Os aparelhos recebem as mudanças no próximo pull. Referências (espécie, solo, local, vaso, planta) são validadas antes de gravar. Datas só com o dia (`2026-10-12`) viram meio-dia daquele dia, sem fuso, para não mudarem de dia em nenhum fuso horário. Ao excluir um registro de rega ou de defensivo, o servidor também recalcula a última rega/aplicação da planta, porque o app só faz esse recálculo quando recebe um registro novo.
 

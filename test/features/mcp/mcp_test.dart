@@ -8,6 +8,7 @@ import 'package:polypodium_server/features/mcp/garden_store.dart';
 import 'package:polypodium_server/features/mcp/i_mcp_token_repository.dart';
 import 'package:polypodium_server/features/mcp/mcp_handler.dart';
 import 'package:polypodium_server/features/mcp/mcp_server.dart';
+import 'package:polypodium_server/features/mcp/photo_intake.dart';
 import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/sync/i_sync_repository.dart';
 import 'package:polypodium_server/middleware/mcp_auth_middleware.dart';
@@ -104,6 +105,22 @@ extension on _FakeStore {
   }
 }
 
+/// Takes `{"data": "jpg"|"png"}` and records what it saves.
+class _FakeIntake implements IPhotoIntake {
+  final saved = <String, List<int>>{};
+
+  @override
+  Future<IncomingPhoto> read(Object? spec) async => switch (spec) {
+        {'data': 'jpg'} => const IncomingPhoto([0xff, 0xd8, 0xff], '.jpg'),
+        {'data': 'png'} => const IncomingPhoto([0x89, 0x50], '.png'),
+        _ => throw const McpToolError('not a JPEG, PNG, WebP or GIF image'),
+      };
+
+  @override
+  Future<void> save(String gardenId, String photoKey, List<int> bytes) async =>
+      saved['$gardenId/$photoKey'] = bytes;
+}
+
 class _FakeSync implements ISyncRepository {
   _FakeSync(this.store);
   final _FakeStore store;
@@ -148,6 +165,7 @@ void main() {
   late _FakeStore store;
   late McpServer server;
   late List<String> loaded;
+  late _FakeIntake intake;
   var nextId = 0;
 
   setUp(() {
@@ -165,6 +183,12 @@ void main() {
       ..put('location', 'loc1', {'name': 'Varanda'})
       ..put('location', 'loc2', {'name': 'Sala'})
       ..put('bed', 'pot1', {'name': 'Jardineira', 'locationId': 'loc1'})
+      ..put('bed', 'pot2', {
+        'name': 'Vaso grande',
+        'locationId': 'loc2',
+        'diameterCm': 30.0,
+        'material': 'clay',
+      })
       ..put('plant', _fern, {
         'nickname': 'Fern',
         'speciesId': 'sp1',
@@ -225,6 +249,7 @@ void main() {
         'createdAt': '2026-10-02T09:00:00.000',
       });
     loaded = [];
+    intake = _FakeIntake();
     server = McpServer(
       polypodiumTools(
         store: store,
@@ -233,6 +258,7 @@ void main() {
           loaded.add('$gardenId/$key@$maxSide');
           return key == 'gone.jpg' ? null : McpImage([1, 2, 3], 'image/jpeg');
         },
+        intake: intake,
         clock: () => DateTime(2026, 10, 12, 15),
       ),
       version: 'test',
@@ -562,6 +588,217 @@ void main() {
       ok(await call('update_plant', {'plant': _cactus, 'potId': ''}));
       expect(store.received.last.payload['potId'], isNull);
       expect(store.received.last.payload['locationId'], 'loc1');
+    });
+  });
+
+  group('pots, cuttings and repotting', () {
+    test('create_pot writes a bed row in the app\'s shape', () async {
+      expect(
+          errorText(await call('create_pot',
+              {'name': 'X', 'locationId': 'nowhere'})),
+          contains('location not found'));
+      expect(
+          errorText(await call('create_pot', {'name': 'X', 'diameterCm': 0})),
+          contains('positive'));
+
+      final created = ok(await call('create_pot', {
+        'name': 'Cachepô',
+        'diameterCm': 18,
+        'material': 'ceramic',
+        'locationId': 'loc2',
+      }));
+      final change = store.received.single;
+      expect(change.entityType, 'bed');
+      expect(change.entityId, created['id']);
+      expect(change.payload, {
+        'id': created['id'],
+        'name': 'Cachepô',
+        'kind': 'pot',
+        'diameterCm': 18.0,
+        'material': 'ceramic',
+        'locationId': 'loc2',
+        'notes': null,
+        'createdAt': '2026-10-12T18:00:00.000Z',
+      });
+      final pots = ok(await call('list_pots', {}))['pots'] as List;
+      expect(pots.map((p) => (p as Map)['name']), contains('Cachepô'));
+    });
+
+    test('create_cutting starts from the parent, outside any pot', () async {
+      final created = ok(await call(
+          'create_cutting', {'parent': 'AAAAAA', 'nickname': 'Fern (muda)'}));
+      expect(created['parent'], {'id': _fern, 'nickname': 'Fern'});
+      final payload = store.received.single.payload;
+      expect(payload['parentPlantId'], _fern);
+      expect(payload['speciesId'], 'sp1');
+      expect(payload['soilId'], 'loamy');
+      expect(payload['locationId'], 'loc1');
+      expect(payload['potId'], isNull);
+      expect(payload['irrigationFrequencyDays'], isNull);
+      expect(payload['status'], 'active');
+
+      ok(await call('create_cutting', {
+        'parent': _fern,
+        'nickname': 'Fern 2',
+        'potId': 'pot2',
+        'soilId': 'sandy',
+      }));
+      final second = store.received.last.payload;
+      expect(second['locationId'], 'loc2'); // the pot's, not the parent's
+      expect(second['soilId'], 'sandy');
+    });
+
+    test('repot_plant moves plants into a pot and records the move',
+        () async {
+      final result = ok(await call('repot_plant', {
+        'plants': ['AAAAAA', 'Spiky'],
+        'pot': 'vaso grande',
+        'soilId': 'succulentMix',
+        'date': '2026-10-11',
+        'note': 'raízes apertadas',
+      }));
+      expect(result['pot'], {'id': 'pot2', 'name': 'Vaso grande'});
+
+      final plants = {
+        for (final c in store.received)
+          if (c.entityType == 'plant') c.entityId: c.payload,
+      };
+      expect(plants[_fern]!['potId'], 'pot2');
+      expect(plants[_fern]!['locationId'], 'loc2');
+      expect(plants[_fern]!['soilId'], 'succulentMix');
+      expect(plants[_cactus]!['potId'], 'pot2');
+
+      final entries = {
+        for (final c in store.received)
+          if (c.entityType == 'entry') c.payload['plantId']: c.payload,
+      };
+      expect(entries[_fern]!['type'], 'repotting');
+      expect(entries[_fern]!['date'], '2026-10-11T12:00:00.000');
+      expect(entries[_fern]!['note'], 'raízes apertadas');
+      expect(jsonDecode(entries[_fern]!['extraData'] as String), {
+        'potDiameterCm': 30.0,
+        'potMaterial': 'clay',
+        'newSoilId': 'succulentMix',
+        'fromPotId': 'pot1',
+        'toPotId': 'pot2',
+        'toPotName': 'Vaso grande',
+      });
+      // The cactus wasn't in a pot: nothing to leave.
+      expect(jsonDecode(entries[_cactus]!['extraData'] as String),
+          isNot(contains('fromPotId')));
+    });
+
+    test('repot_plant with pot "" takes the plant out of its pot', () async {
+      ok(await call('repot_plant', {
+        'plants': [_fern],
+        'pot': '',
+        'potDiameterCm': 25,
+      }));
+      final plant =
+          store.received.firstWhere((c) => c.entityType == 'plant').payload;
+      expect(plant['potId'], isNull);
+      expect(plant['locationId'], 'loc1');
+      final entry =
+          store.received.firstWhere((c) => c.entityType == 'entry').payload;
+      expect(jsonDecode(entry['extraData'] as String),
+          {'potDiameterCm': 25.0, 'fromPotId': 'pot1'});
+    });
+
+    test('repot_plant only changing the soil leaves the pot alone', () async {
+      ok(await call('repot_plant', {'plants': ['Spiky'], 'soilId': 'loamy'}));
+      final plant =
+          store.received.firstWhere((c) => c.entityType == 'plant').payload;
+      expect(plant['soilId'], 'loamy');
+      expect(plant['locationId'], 'loc2');
+      expect(errorText(await call('repot_plant',
+              {'plants': ['Spiky'], 'pot': 'Nenhum'})),
+          contains('pot not found'));
+    });
+  });
+
+  group('entry photos', () {
+    test('add_entry stores photos as the entry\'s own plus extras', () async {
+      final result = ok(await call('add_entry', {
+        'plants': ['Spiky'],
+        'type': 'observation',
+        'photos': [
+          {'data': 'jpg'},
+          {'data': 'png'},
+        ],
+      }));
+      final entryId = ((result['created'] as List).single as Map)['entryId'];
+      final entry = store.received.firstWhere((c) => c.entityType == 'entry');
+      expect(entry.payload['photoKey'], '$entryId.jpg');
+      final extra =
+          store.received.firstWhere((c) => c.entityType == 'entry_photo');
+      expect(extra.payload['entryId'], entryId);
+      expect(extra.payload['photoKey'], '${extra.entityId}.png');
+      expect(extra.payload['position'], 0);
+      expect(intake.saved.keys,
+          {'g1/$entryId.jpg', 'g1/${extra.entityId}.png'});
+
+      final photos = ok(await call('list_plant_photos', {'plant': 'Spiky'}));
+      expect((photos['photos'] as List).first,
+          containsPair('photoId', entryId));
+    });
+
+    test('a bad photo fails the call before anything is written', () async {
+      final result = await call('add_entry', {
+        'plants': ['Spiky'],
+        'type': 'observation',
+        'photos': [
+          {'data': 'jpg'},
+          {'data': 'heic'},
+        ],
+      });
+      expect(errorText(result), contains('not a JPEG'));
+      expect(store.received, isEmpty);
+      expect(intake.saved, isEmpty);
+    });
+
+    test('add_entry_photos appends after the existing ones', () async {
+      final result = ok(await call('add_entry_photos', {
+        'entryId': 'e3',
+        'photos': [
+          {'data': 'jpg'},
+        ],
+      }));
+      expect(result['photoCount'], 3);
+      final extra = store.received.single;
+      expect(extra.entityType, 'entry_photo');
+      expect(extra.payload['position'], 1);
+
+      // An entry without its own photo gets it first.
+      ok(await call('add_entry_photos', {
+        'entryId': 'e1',
+        'photos': [
+          {'data': 'png'},
+          {'data': 'jpg'},
+        ],
+      }));
+      final entry = store.received.firstWhere(
+          (c) => c.entityType == 'entry' && c.entityId == 'e1');
+      expect(entry.payload['photoKey'], 'e1.png');
+      expect(entry.payload['type'], 'irrigation'); // rest of the entry kept
+      expect(store.rows['entry_photo']!.values
+          .where((p) => p.payload['entryId'] == 'e1')
+          .single
+          .payload['position'], 0);
+    });
+
+    test('add_entry_photos keeps an entry within five photos', () async {
+      final result = await call('add_entry_photos', {
+        'entryId': 'e3',
+        'photos': List.filled(4, {'data': 'jpg'}),
+      });
+      expect(errorText(result), contains('at most 5'));
+      expect(errorText(await call('add_entry_photos', {
+        'entryId': 'nope',
+        'photos': [
+          {'data': 'jpg'},
+        ],
+      })), contains('entry not found'));
+      expect(store.received, isEmpty);
     });
   });
 

@@ -27,7 +27,7 @@ O [guia de instalação](docs/deploy.md) cobre o passo a passo completo: HTTPS c
 
 ## Acesso por IA (MCP)
 
-O servidor inclui um servidor [MCP](https://modelcontextprotocol.io). Com ele, assistentes de IA leem um jardim (plantas, diário, fotos, catálogos e previsão do tempo) e, se você permitir, registram regas e criam ou editam plantas. As mudanças chegam aos aparelhos no próximo sync, como as de qualquer outro aparelho.
+O servidor inclui um servidor [MCP](https://modelcontextprotocol.io). Com ele, assistentes de IA leem um jardim (plantas, diário, fotos, catálogos e previsão do tempo) e, se você permitir, registram regas e outros cuidados com fotos, criam ou editam plantas, mudas e vasos e fazem replantios. As mudanças chegam aos aparelhos no próximo sync, como as de qualquer outro aparelho.
 
 1. **Ligar:** o MCP vem desligado. Um admin liga em *Administração do servidor → Acesso por IA (MCP)*, no app, ou com `PATCH /api/v1/admin/settings` e `{"mcpEnabled": true}`.
 2. **Criar um token:** no app, abra o menu do workspace → *Acesso por IA (MCP)* → *Novo token*. Cada token dá acesso a um único jardim, como somente leitura ou com alterações. Ele aparece uma vez só.

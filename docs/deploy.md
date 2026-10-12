@@ -201,3 +201,4 @@ Tudo roda em uma única transação: se algo falhar, o banco fica exatamente com
 | `ALLOWED_ORIGINS` | CORS: `*` ou lista de origens separadas por vírgula (padrão `*`). |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW` | Limite contra força bruta em `/api/v1/auth/*` (padrão 20 req / 300 s por IP). |
 | `MAX_JSON_BODY_BYTES` / `MAX_PHOTO_BYTES` | Tamanho máximo de requisições JSON e fotos (padrão 1 MB / 15 MB). |
+| `MAX_MCP_BODY_BYTES` | Tamanho máximo de uma requisição MCP, que pode trazer fotos em base64 (padrão: `MAX_JSON_BODY_BYTES` + 40 MB, o bastante para duas fotos de 15 MB). |

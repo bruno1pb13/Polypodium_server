@@ -22,7 +22,7 @@ class McpHandler {
     }
     final grant = request.context['mcpGrant'] as McpGrant;
 
-    final bytes = await readBodyCapped(request, Config.maxJsonBodyBytes);
+    final bytes = await readBodyCapped(request, Config.maxMcpBodyBytes);
     final Object? message;
     try {
       message = jsonDecode(utf8.decode(bytes));

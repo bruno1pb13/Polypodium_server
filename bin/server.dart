@@ -18,6 +18,7 @@ import 'package:polypodium_server/features/mcp/mcp_handler.dart';
 import 'package:polypodium_server/features/mcp/mcp_server.dart';
 import 'package:polypodium_server/features/mcp/mcp_token_handler.dart';
 import 'package:polypodium_server/features/mcp/mcp_token_repository.dart';
+import 'package:polypodium_server/features/mcp/photo_intake.dart';
 import 'package:polypodium_server/features/mcp/photo_renderer.dart';
 import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
@@ -73,6 +74,7 @@ void main() async {
       sync: syncRepo,
       forecast: weatherHandler.forecast,
       photos: PhotoRenderer(Config.photosDir).call,
+      intake: PhotoIntake(Config.photosDir, maxBytes: Config.maxPhotoBytes),
     ),
     version: _serverVersion,
     instructions: mcpInstructions,

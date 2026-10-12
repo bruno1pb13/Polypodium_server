@@ -8,6 +8,7 @@ import '../weather/weather_handler.dart';
 import 'garden_store.dart';
 import 'i_mcp_token_repository.dart';
 import 'mcp_server.dart';
+import 'photo_intake.dart';
 import 'photo_renderer.dart';
 
 /// Looks up a location's forecast (see [WeatherHandler.forecast]).
@@ -48,6 +49,8 @@ const _plantStatuses = ['active', 'dead', 'donated', 'archived'];
 const _lightValues = ['fullSun', 'partialShade', 'indirectBright', 'shade'];
 const _humidityValues = ['low', 'medium', 'high'];
 const _petToxicityValues = ['unknown', 'nonToxic', 'toxic'];
+const _potKinds = ['pot', 'planter', 'bed', 'other'];
+const _potMaterials = ['plastic', 'clay', 'ceramic', 'fabric', 'other'];
 
 /// Ids of the soils every app install seeds (the app's `SoilType` names);
 /// valid soil references even when no device has synced them yet.
@@ -77,6 +80,9 @@ const _defaultSoilId = 'pottingMix';
 /// is the most Claude looks at without downscaling it itself.
 const _photoSizes = {'small': 512, 'medium': 1024, 'large': 1568};
 const _maxPhotosPerCall = 6;
+
+/// Photos one entry can hold (the app's `maxEntryPhotos`).
+const _maxEntryPhotos = 5;
 const _shortCodeLength = 6;
 
 const mcpInstructions = '''
@@ -96,9 +102,28 @@ List<McpTool> polypodiumTools({
   required ISyncRepository sync,
   ForecastLookup? forecast,
   PhotoLoader? photos,
+  IPhotoIntake? intake,
   DateTime Function() clock = DateTime.now,
 }) {
-  final tools = _Tools(store, sync, forecast, photos, clock);
+  final tools = _Tools(store, sync, forecast, photos, intake, clock);
+  final photosParam = {
+    if (intake != null)
+      'photos': {
+        'type': 'array',
+        'maxItems': _maxEntryPhotos,
+        'description': 'Up to $_maxEntryPhotos photos (JPEG, PNG, WebP or '
+            'GIF), each {"url": "https://…"} or {"data": base64}. The first '
+            'is the entry\'s main photo.',
+        'items': {
+          'type': 'object',
+          'properties': {
+            'url': _string('Public http(s) URL of the image.'),
+            'data': _string('Base64 image bytes (a data: URL also works).'),
+          },
+          'additionalProperties': false,
+        },
+      },
+  };
   return [
     McpTool(
       name: 'garden_overview',
@@ -253,7 +278,9 @@ List<McpTool> polypodiumTools({
           '{"pestType"}, fertilizer {"products":[{"name","dose"}]}, '
           'pesticide {"products":[{"defensivoId","name","dose"}],'
           '"recurrenceDays"}, pruning {"reason"}, harvest '
-          '{"quantity","unit"}.',
+          '{"quantity","unit"}. To repot (change pot or soil), use '
+          'repot_plant instead.${intake == null ? '' : ' Photos given here '
+              'go to every entry created.'}',
       inputSchema: _schema({
         'plants': {
           'type': 'array',
@@ -266,10 +293,25 @@ List<McpTool> polypodiumTools({
         'note': _string('Free text.'),
         'numericValue': {'type': 'number'},
         'details': {'type': 'object'},
+        ...photosParam,
       }, required: ['type']),
       writes: true,
       run: _json(tools.addEntry),
     ),
+    if (intake != null)
+      McpTool(
+        name: 'add_entry_photos',
+        title: 'Add photos to an entry',
+        description: 'Attaches photos to an existing diary entry, after the '
+            'ones it has (at most $_maxEntryPhotos per entry). Entry ids come '
+            'from list_entries or get_plant.',
+        inputSchema: _schema({
+          'entryId': _string('Entry id.'),
+          ...photosParam,
+        }, required: ['entryId', 'photos']),
+        writes: true,
+        run: _json(tools.addEntryPhotos),
+      ),
     McpTool(
       name: 'delete_entry',
       title: 'Delete entry',
@@ -300,6 +342,27 @@ List<McpTool> polypodiumTools({
       run: _json(tools.createPlant),
     ),
     McpTool(
+      name: 'create_cutting',
+      title: 'Create cutting',
+      description: 'Adds a cutting/seedling (muda) taken from a plant, like '
+          'the app\'s "Create cutting": it records the parent plant and, '
+          'unless given, takes its species, soil and location. It starts out '
+          'of any pot and with the species\' watering frequency.',
+      inputSchema: _schema({
+        'parent': _string('Parent plant id, short code or exact nickname.'),
+        'nickname': _string('Name of the new plant.'),
+        'speciesId': _string('Default: the parent\'s species.'),
+        'soilId': _string('Default: the parent\'s soil.'),
+        'locationId': _string('Default: the pot\'s location if a pot is '
+            'given, else the parent\'s.'),
+        'potId': _string('Pot id. Default: none.'),
+        'irrigationFrequencyDays': _integer('Overrides the species default.'),
+        'acquisitionDate': _date('Default: today.'),
+      }, required: ['parent', 'nickname']),
+      writes: true,
+      run: _json(tools.createCutting),
+    ),
+    McpTool(
       name: 'update_plant',
       title: 'Update plant',
       description: 'Changes a plant. Only the given fields change; pass an '
@@ -323,6 +386,32 @@ List<McpTool> polypodiumTools({
       }, required: ['plant']),
       writes: true,
       run: _json(tools.updatePlant),
+    ),
+    McpTool(
+      name: 'repot_plant',
+      title: 'Repot plants',
+      description: 'Records a repotting (replantio) for one or more plants, '
+          'like the app: a "repotting" diary entry, and the plants move to '
+          'the new pot (taking its location, when it has one) and/or soil. '
+          'Pot diameter and material default to the new pot\'s.',
+      inputSchema: _schema({
+        'plants': {
+          'type': 'array',
+          'items': {'type': 'string'},
+          'minItems': 1,
+          'description': 'Plant ids, short codes or exact nicknames.',
+        },
+        'pot': _string('Pot to move them into: id, short code or exact name. '
+            '"" takes them out of their pot. Omit to keep the current pot.'),
+        'soilId': _string('New soil id (see list_soils). Omit to keep it.'),
+        'potDiameterCm': {'type': 'number', 'exclusiveMinimum': 0},
+        'potMaterial': _enum(_potMaterials, 'Material of the new pot.'),
+        'date': _string('YYYY-MM-DD or ISO-8601 date-time. Default: now.'),
+        'note': _string('Free text.'),
+        ...photosParam,
+      }, required: ['plants']),
+      writes: true,
+      run: _json(tools.repotPlants),
     ),
     McpTool(
       name: 'create_species',
@@ -395,15 +484,33 @@ List<McpTool> polypodiumTools({
       writes: true,
       run: _json(tools.createLocation),
     ),
+    McpTool(
+      name: 'create_pot',
+      title: 'Create pot',
+      description: 'Adds a pot, planter or bed (vaso, jardineira, canteiro) '
+          'that can hold several plants. Put plants in it with repot_plant.',
+      inputSchema: _schema({
+        'name': _string('Pot name.'),
+        'kind': _enum(_potKinds, 'Default: pot.'),
+        'diameterCm': {'type': 'number', 'exclusiveMinimum': 0},
+        'material': _enum(_potMaterials, 'Pot material.'),
+        'locationId': _string('Location id.'),
+        'notes': _string('Free text.'),
+      }, required: ['name']),
+      writes: true,
+      run: _json(tools.createPot),
+    ),
   ];
 }
 
 class _Tools {
-  _Tools(this._store, this._sync, this._forecast, this._photos, this._clock);
+  _Tools(this._store, this._sync, this._forecast, this._photos, this._intake,
+      this._clock);
   final IGardenStore _store;
   final ISyncRepository _sync;
   final ForecastLookup? _forecast;
   final PhotoLoader? _photos;
+  final IPhotoIntake? _intake;
   final DateTime Function() _clock;
 
   // -- reads -----------------------------------------------------------------
@@ -769,38 +876,97 @@ class _Tools {
     if (numeric != null && numeric is! num) {
       throw const McpToolError('numericValue must be a number');
     }
+    final photos = await _readPhotos(args);
     final now = _clock().toUtc();
     final date = _entryDate(_optString(args, 'date'), now);
     final note = _optString(args, 'note');
 
-    final changes = [
-      for (final p in plants)
-        _change(grant, 'entry', _newId(), now, {
-          'plantId': p.id,
-          'date': date,
-          'photoPath': null,
-          'note': note,
-          'type': type,
-          'numericValue': (numeric as num?)?.toDouble(),
-          'extraData': details == null || (details as Map).isEmpty
-              ? null
-              : jsonEncode(details),
-          'createdAt': now.toIso8601String(),
-        }),
-    ];
-    await _sync.receiveChanges(
-        grant.gardenId, grant.userId, grant.deviceId, changes);
+    final entries = <SyncChange>[];
+    final extraPhotos = <SyncChange>[];
+    for (final p in plants) {
+      final id = _newId();
+      final (photoKey, extras) = await _storePhotos(grant, id, photos, now);
+      extraPhotos.addAll(extras);
+      entries.add(_change(grant, 'entry', id, now, {
+        'id': id,
+        'plantId': p.id,
+        'date': date,
+        'photoPath': null,
+        if (photoKey != null) 'photoKey': photoKey,
+        'note': note,
+        'type': type,
+        'numericValue': (numeric as num?)?.toDouble(),
+        'extraData': details == null || (details as Map).isEmpty
+            ? null
+            : jsonEncode(details),
+        'createdAt': now.toIso8601String(),
+      }));
+    }
+    await _sync.receiveChanges(grant.gardenId, grant.userId, grant.deviceId,
+        [...entries, ...extraPhotos]);
     return {
       'created': [
         for (var i = 0; i < plants.length; i++)
           {
-            'entryId': changes[i].entityId,
+            'entryId': entries[i].entityId,
             'plantId': plants[i].id,
             'nickname': plants[i].payload['nickname'],
           },
       ],
       'type': type,
       'date': date,
+      if (photos.isNotEmpty) 'photosPerEntry': photos.length,
+    };
+  }
+
+  Future<Map<String, Object?>> addEntryPhotos(
+      McpGrant grant, Map<String, Object?> args) async {
+    final id = _reqString(args, 'entryId');
+    final entry = await _store.get(grant.gardenId, 'entry', id) ??
+        (throw McpToolError('entry not found: $id'));
+    final photos = await _readPhotos(args);
+    if (photos.isEmpty) throw const McpToolError('photos is required');
+    final hasOwn = entry.payload['photoKey'] != null;
+    final extras = [
+      for (final p in await _store.list(grant.gardenId, 'entry_photo'))
+        if (p.payload['entryId'] == id) p,
+    ];
+    final current = (hasOwn ? 1 : 0) + extras.length;
+    if (current + photos.length > _maxEntryPhotos) {
+      throw McpToolError('the entry has $current photos; at most '
+          '$_maxEntryPhotos per entry');
+    }
+    var nextPosition = 0;
+    for (final p in extras) {
+      if (p.payload['position'] case final int position
+          when position >= nextPosition) {
+        nextPosition = position + 1;
+      }
+    }
+
+    final now = _clock().toUtc();
+    final (photoKey, extraPhotos) = await _storePhotos(
+        grant, id, photos, now,
+        hasOwn: hasOwn, nextPosition: nextPosition);
+    final changes = [
+      if (photoKey != null)
+        _change(grant, 'entry', id, now,
+            {...entry.payload, 'photoKey': photoKey}),
+      ...extraPhotos,
+    ];
+    final applied = await _sync.receiveChanges(
+        grant.gardenId, grant.userId, grant.deviceId, changes);
+    if (applied < changes.length) {
+      throw const McpToolError(
+          'not saved: the entry has a newer edit; read it again and retry');
+    }
+    return {
+      'entryId': id,
+      'added': [
+        if (photoKey != null) id,
+        for (final c in extraPhotos) c.entityId,
+      ],
+      'photoCount': current + photos.length,
     };
   }
 
@@ -851,22 +1017,60 @@ class _Tools {
   Future<Map<String, Object?>> createPlant(
       McpGrant grant, Map<String, Object?> args) async {
     final g = await _Snapshot.load(_store, grant.gardenId);
-    final nickname = _reqString(args, 'nickname');
-    final speciesId = _reqString(args, 'speciesId');
-    if (g.speciesById[speciesId] == null) {
-      throw McpToolError('species not found: $speciesId');
-    }
-    final soilId = _optString(args, 'soilId') ?? _defaultSoilId;
-    g.requireSoil(soilId);
-    final potId = _optString(args, 'potId');
-    final pot = potId == null ? null : g.requirePot(potId);
-    final locationId =
-        _optString(args, 'locationId') ?? pot?.payload['locationId'] as String?;
-    if (locationId != null) g.requireLocation(locationId);
     final parentId = _optString(args, 'parentPlantId');
     if (parentId != null && g.plantsById[parentId] == null) {
       throw McpToolError('parent plant not found: $parentId');
     }
+    return _addPlant(grant, g, args,
+        speciesId: _reqString(args, 'speciesId'),
+        soilId: _optString(args, 'soilId') ?? _defaultSoilId,
+        parentId: parentId);
+  }
+
+  /// The app's "Create cutting": a new plant that starts from its parent's
+  /// species, soil and location, outside any pot.
+  Future<Map<String, Object?>> createCutting(
+      McpGrant grant, Map<String, Object?> args) async {
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final parent = g.resolvePlant(_reqString(args, 'parent'));
+    final p = parent.payload;
+    final result = await _addPlant(grant, g, args,
+        speciesId: _optString(args, 'speciesId') ?? p['speciesId'] as String,
+        soilId: _optString(args, 'soilId') ??
+            (p['soilId'] ?? p['soilType'] ?? _defaultSoilId) as String,
+        parentId: parent.id,
+        fallbackLocationId: p['locationId'] as String?);
+    return {
+      ...result,
+      'parent': {'id': parent.id, 'nickname': p['nickname']},
+    };
+  }
+
+  /// Saves a new plant from [args]' nickname, pot, location, watering
+  /// frequency and acquisition date. Without a location it takes the pot's,
+  /// then [fallbackLocationId].
+  Future<Map<String, Object?>> _addPlant(
+    McpGrant grant,
+    _Snapshot g,
+    Map<String, Object?> args, {
+    required String speciesId,
+    required String soilId,
+    String? parentId,
+    String? fallbackLocationId,
+  }) async {
+    final nickname = _reqString(args, 'nickname');
+    if (g.speciesById[speciesId] == null) {
+      throw McpToolError('species not found: $speciesId');
+    }
+    g.requireSoil(soilId);
+    final potId = _optString(args, 'potId');
+    final pot = potId == null ? null : g.requirePot(potId);
+    final locationId = _optString(args, 'locationId') ??
+        pot?.payload['locationId'] as String? ??
+        (g.locationsById.containsKey(fallbackLocationId)
+            ? fallbackLocationId
+            : null);
+    if (locationId != null) g.requireLocation(locationId);
 
     final now = _clock().toUtc();
     final id = _newId();
@@ -962,6 +1166,137 @@ class _Tools {
           'not saved: the plant has a newer edit; read it again and retry');
     }
     return {'id': plant.id, 'changed': changed.toSet().toList()};
+  }
+
+  /// A repotting as the app records it (`EntryMutations.createMany`): one
+  /// `repotting` entry per plant, whose details note the pot each plant
+  /// leaves and enters, plus the plant moved to the new soil and pot.
+  Future<Map<String, Object?>> repotPlants(
+      McpGrant grant, Map<String, Object?> args) async {
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final refs = _optStringList(args, 'plants');
+    if (refs == null || refs.isEmpty) {
+      throw const McpToolError('plants is required');
+    }
+    final plants = {for (final r in refs) g.resolvePlant(r)}.toList();
+
+    StoredEntity? toPot;
+    var removeFromPot = false;
+    if (args['pot'] != null) {
+      final ref = _optString(args, 'pot'); // "" takes them out
+      if (ref == null) {
+        removeFromPot = true;
+      } else {
+        toPot = g.resolvePot(ref);
+      }
+    }
+    final soilId = _optString(args, 'soilId');
+    if (soilId != null) g.requireSoil(soilId);
+    final diameter = _optPositive(args, 'potDiameterCm') ??
+        (toPot?.payload['diameterCm'] as num?)?.toDouble();
+    final material = _optEnum(args, 'potMaterial', _potMaterials) ??
+        toPot?.payload['material'] as String?;
+    final soilName = g.soilsById[soilId]?.payload['name'];
+    final photos = await _readPhotos(args);
+    final now = _clock().toUtc();
+    final date = _entryDate(_optString(args, 'date'), now);
+    final note = _optString(args, 'note');
+
+    final plantChanges = <SyncChange>[];
+    final entries = <SyncChange>[];
+    final extraPhotos = <SyncChange>[];
+    final results = <Map<String, Object?>>[];
+    for (final plant in plants) {
+      final p = plant.payload;
+      final fromPotId = p['potId'] as String?;
+      final payload = {...p};
+      final changed = <String>[];
+      if (soilId != null && (p['soilId'] ?? p['soilType']) != soilId) {
+        payload.remove('soilType');
+        payload['soilId'] = soilId;
+        changed.add('soilId');
+      }
+      final leaves = fromPotId != null &&
+          (removeFromPot || (toPot != null && toPot.id != fromPotId));
+      if (toPot != null && toPot.id != fromPotId) {
+        payload['potId'] = toPot.id;
+        changed.add('potId');
+        final locationId = toPot.payload['locationId'];
+        if (locationId != null && locationId != p['locationId']) {
+          payload['locationId'] = locationId;
+          changed.add('locationId');
+        }
+      } else if (removeFromPot && fromPotId != null) {
+        payload['potId'] = null;
+        changed.add('potId');
+      }
+      if (changed.isNotEmpty) {
+        plantChanges.add(_change(grant, 'plant', plant.id, now, payload));
+      }
+
+      final details = {
+        if (diameter != null) 'potDiameterCm': diameter,
+        if (material != null) 'potMaterial': material,
+        if (soilId != null) 'newSoilId': soilId,
+        if (soilId != null && soilName != null) 'newSoilName': soilName,
+        if (leaves) 'fromPotId': fromPotId,
+        if (toPot != null) 'toPotId': toPot.id,
+        if (toPot != null) 'toPotName': toPot.payload['name'],
+      };
+      final id = _newId();
+      final (photoKey, extras) = await _storePhotos(grant, id, photos, now);
+      extraPhotos.addAll(extras);
+      entries.add(_change(grant, 'entry', id, now, {
+        'id': id,
+        'plantId': plant.id,
+        'date': date,
+        'photoPath': null,
+        if (photoKey != null) 'photoKey': photoKey,
+        'note': note,
+        'type': 'repotting',
+        'numericValue': null,
+        'extraData': details.isEmpty ? null : jsonEncode(details),
+        'createdAt': now.toIso8601String(),
+      }));
+      results.add({
+        'entryId': id,
+        'plantId': plant.id,
+        'nickname': p['nickname'],
+        'changed': changed,
+      });
+    }
+    await _sync.receiveChanges(grant.gardenId, grant.userId, grant.deviceId,
+        [...plantChanges, ...entries, ...extraPhotos]);
+    return {
+      'repotted': results,
+      'date': date,
+      'pot': toPot == null
+          ? null
+          : {'id': toPot.id, 'name': toPot.payload['name']},
+      if (photos.isNotEmpty) 'photosPerEntry': photos.length,
+    };
+  }
+
+  Future<Map<String, Object?>> createPot(
+      McpGrant grant, Map<String, Object?> args) async {
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final locationId = _optString(args, 'locationId');
+    if (locationId != null) g.requireLocation(locationId);
+    final now = _clock().toUtc();
+    final id = _newId();
+    final payload = <String, Object?>{
+      'id': id,
+      'name': _reqString(args, 'name'),
+      'kind': _optEnum(args, 'kind', _potKinds) ?? 'pot',
+      'diameterCm': _optPositive(args, 'diameterCm'),
+      'material': _optEnum(args, 'material', _potMaterials),
+      'locationId': locationId,
+      'notes': _optString(args, 'notes'),
+      'createdAt': now.toIso8601String(),
+    };
+    await _sync.receiveChanges(grant.gardenId, grant.userId, grant.deviceId,
+        [_change(grant, 'bed', id, now, payload)]);
+    return {'id': id, 'shortCode': _shortCode(id), 'name': payload['name']};
   }
 
   Future<Map<String, Object?>> createSpecies(
@@ -1105,6 +1440,51 @@ class _Tools {
 
   static String _dayStart(String day) => '${day}T00:00:00.000';
 
+  /// Reads every photo in `args['photos']` before anything is stored, so a
+  /// bad one fails the call without leaving files or rows behind.
+  Future<List<IncomingPhoto>> _readPhotos(Map<String, Object?> args) async {
+    final raw = args['photos'];
+    if (raw == null) return const [];
+    final intake = _intake ??
+        (throw const McpToolError('this server does not take photos'));
+    if (raw is! List) throw const McpToolError('photos must be a list');
+    if (raw.length > _maxEntryPhotos) {
+      throw const McpToolError(
+          'at most $_maxEntryPhotos photos per entry');
+    }
+    return [for (final spec in raw) await intake.read(spec)];
+  }
+
+  /// Stores [photos] for entry [entryId], named like the app's uploads
+  /// (`<entity id><ext>`). Unless the entry [hasOwn] main photo, the first
+  /// becomes it: its key is returned for the entry's `photoKey`. The rest
+  /// become `entry_photo` rows from [nextPosition] on.
+  Future<(String?, List<SyncChange>)> _storePhotos(McpGrant grant,
+      String entryId, List<IncomingPhoto> photos, DateTime now,
+      {bool hasOwn = false, int nextPosition = 0}) async {
+    String? mainKey;
+    final extras = <SyncChange>[];
+    var position = nextPosition;
+    for (final photo in photos) {
+      if (!hasOwn && mainKey == null) {
+        mainKey = '$entryId${photo.extension}';
+        await _intake!.save(grant.gardenId, mainKey, photo.bytes);
+        continue;
+      }
+      final id = _newId();
+      final key = '$id${photo.extension}';
+      await _intake!.save(grant.gardenId, key, photo.bytes);
+      extras.add(_change(grant, 'entry_photo', id, now, {
+        'id': id,
+        'entryId': entryId,
+        'photoKey': key,
+        'position': position++,
+        'createdAt': now.toIso8601String(),
+      }));
+    }
+    return (mainKey, extras);
+  }
+
   static SyncChange _change(McpGrant grant, String type, String id,
           DateTime now, Map<String, Object?> payload,
           [DateTime? deletedAt]) =>
@@ -1206,6 +1586,26 @@ class _Snapshot {
     throw McpToolError(byName.isEmpty
         ? 'location not found: $ref'
         : 'several locations are named "$trimmed"; use the id');
+  }
+
+  StoredEntity resolvePot(String ref) {
+    final trimmed = ref.trim();
+    if (potsById[trimmed] case final p?) return p;
+    final code = trimmed.replaceFirst('#', '').toUpperCase();
+    if (code.length == _shortCodeLength) {
+      final byCode = pots.where((p) => _shortCode(p.id) == code).toList();
+      if (byCode.length == 1) return byCode.first;
+    }
+    final byName = pots
+        .where((p) =>
+            '${p.payload['name']}'.toLowerCase() == trimmed.toLowerCase())
+        .toList();
+    if (byName.length == 1) return byName.first;
+    throw McpToolError(byName.isEmpty
+        ? 'pot not found: $ref'
+        : 'several pots are named "$trimmed": '
+            '${byName.map((p) => _shortCode(p.id)).join(', ')}; use the short '
+            'code');
   }
 
   void requireSoil(String id) {
@@ -1445,6 +1845,15 @@ int? _optInt(Map<String, Object?> args, String key,
     throw McpToolError('$key must be between ${min ?? '-'} and ${max ?? '-'}');
   }
   return parsed;
+}
+
+double? _optPositive(Map<String, Object?> args, String key) {
+  final value = args[key];
+  if (value == null) return null;
+  if (value is! num || value <= 0) {
+    throw McpToolError('$key must be a positive number');
+  }
+  return value.toDouble();
 }
 
 String? _optEnum(Map<String, Object?> args, String key, List<String> values) {
