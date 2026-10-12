@@ -308,6 +308,8 @@ void main() {
       expect(await names(_readGrant), contains('list_plants'));
       expect(await names(_readGrant), isNot(contains('add_entry')));
       expect(await names(_writeGrant), contains('add_entry'));
+      expect(await names(_writeGrant), contains('update_species'));
+      expect(await names(_readGrant), isNot(contains('update_species')));
 
       final res = await rpc('tools/call',
           params: {
@@ -483,6 +485,65 @@ void main() {
       expect(payload['soilId'], 'pottingMix');
       expect(payload['status'], 'active');
       expect(payload['acquisitionDate'], '2026-10-12T00:00:00.000');
+    });
+
+    test('update_species changes only the given fields', () async {
+      store.rows['species']!['sp1']!.payload
+        ..['light'] = 'shade'
+        ..['careNotes'] = 'Gosta de umidade'
+        ..['createdAt'] = '2026-01-01T00:00:00.000';
+
+      final result = ok(await call('update_species', {
+        'species': 'nephrolepis exaltata',
+        'defaultIrrigationFrequencyDays': 4,
+        'light': '',
+        'floweringMonths': [12, 3, 3],
+        'recommendedSoilIds': ['loamy'],
+      }));
+      expect(result['changed'], [
+        'defaultIrrigationFrequencyDays',
+        'light',
+        'floweringMonths',
+        'recommendedSoilIds',
+      ]);
+      final change = store.received.single;
+      expect(change.entityType, 'species');
+      expect(change.entityId, 'sp1');
+      expect(change.deviceId, 'mcp-t2');
+      final payload = change.payload;
+      expect(payload['defaultIrrigationFrequencyDays'], 4);
+      expect(payload['light'], isNull);
+      expect(payload['floweringMonths'], [3, 12]);
+      expect(payload['recommendedSoilIds'], ['loamy']);
+      // Fields not given stay as they were.
+      expect(payload['popularName'], 'Samambaia');
+      expect(payload['careNotes'], 'Gosta de umidade');
+      expect(payload['createdAt'], '2026-01-01T00:00:00.000');
+    });
+
+    test('update_species without changes writes nothing', () async {
+      final result = ok(await call('update_species',
+          {'species': 'sp2', 'popularName': 'Cacto', 'floweringMonths': null}));
+      expect(result['changed'], isEmpty);
+      expect(store.received, isEmpty);
+    });
+
+    test('update_species validates what it is given', () async {
+      expect(errorText(await call('update_species', {'species': 'Rosa'})),
+          contains('species not found'));
+      expect(
+          errorText(await call('update_species',
+              {'species': 'sp1', 'recommendedSoilIds': ['lava']})),
+          contains('soil not found'));
+      expect(
+          errorText(await call(
+              'update_species', {'species': 'sp1', 'floweringMonths': [13]})),
+          contains('months 1-12'));
+      expect(
+          errorText(await call(
+              'update_species', {'species': 'sp1', 'light': 'dark'})),
+          contains('light must be one of'));
+      expect(store.received, isEmpty);
     });
 
     test('update_plant changes only the given fields', () async {
