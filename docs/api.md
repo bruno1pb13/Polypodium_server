@@ -305,11 +305,12 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 | `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso |
 | `delete_entry` ✎ | Exclui um registro (e as fotos dele) |
 | `create_plant` ✎, `update_plant` ✎ | Cria/edita planta (nome, status, espécie, solo, local, vaso, frequência de rega) |
+| `update_species` ✎ | Edita a ficha de uma espécie (nomes, rega padrão, luz, umidade, toxicidade, floração, notas, solos recomendados). Só os campos enviados mudam: `""` limpa um campo e `[]` limpa uma lista |
 | `create_species` ✎, `create_location` ✎ | Cria espécie/local |
 
 ✎ = só aparece para tokens com `canWrite: true`.
 
-Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
+Espécies podem ser indicadas pelo id ou pelo nome popular ou científico exato. Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
 
 **Fotos:** vêm dos arquivos que o sync já guarda (`photoKey` de `entry` e `entry_photo`). Como no app, as fotos extras só contam para um registro que tem foto própria, e a capa é a escolhida na planta (`coverPhotoId`) ou, sem escolha, a foto própria do registro mais recente. O servidor reduz cada foto e a envia em JPEG como conteúdo `image` do MCP, porque os originais podem ter até 15 MB. A redução roda fora do loop de requisições, com no máximo 2 fotos por vez, e as 48 mais recentes ficam em cache na memória.
 

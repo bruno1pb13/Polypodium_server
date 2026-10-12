@@ -350,6 +350,39 @@ List<McpTool> polypodiumTools({
       run: _json(tools.createSpecies),
     ),
     McpTool(
+      name: 'update_species',
+      title: 'Update species',
+      description: 'Changes a species in the catalog (its care sheet). Only '
+          'the given fields change; pass an empty string to clear '
+          'defaultIrrigationFrequencyDays, light, humidity or careNotes, and '
+          'an empty list to clear floweringMonths or recommendedSoilIds. '
+          'Lists replace the current ones. Plants without their own watering '
+          'frequency follow the species default.',
+      inputSchema: _schema({
+        'species': _string('Species id, or exact popular or scientific name.'),
+        'popularName': _string('New common name.'),
+        'scientificName': _string('New scientific name.'),
+        'defaultIrrigationFrequencyDays': {
+          'type': ['integer', 'string'],
+          'description': 'Days between waterings, or "" for none.',
+        },
+        'light': _clearableEnum(_lightValues, 'Light requirement.'),
+        'humidity': _clearableEnum(_humidityValues, 'Humidity requirement.'),
+        'petToxicity': _enum(_petToxicityValues, 'Toxicity to pets.'),
+        'floweringMonths': {
+          'type': 'array',
+          'items': {'type': 'integer', 'minimum': 1, 'maximum': 12},
+        },
+        'careNotes': _string('Free text care notes, or "" for none.'),
+        'recommendedSoilIds': {
+          'type': 'array',
+          'items': {'type': 'string'},
+        },
+      }, required: ['species']),
+      writes: true,
+      run: _json(tools.updateSpecies),
+    ),
+    McpTool(
       name: 'create_location',
       title: 'Create location',
       description: 'Adds a location. Coordinates enable weather forecasts.',
@@ -936,15 +969,6 @@ class _Tools {
     final g = await _Snapshot.load(_store, grant.gardenId);
     final soils = _optStringList(args, 'recommendedSoilIds') ?? const [];
     soils.forEach(g.requireSoil);
-    final months = args['floweringMonths'];
-    final floweringMonths = <int>{};
-    if (months != null) {
-      if (months is! List ||
-          months.any((m) => m is! int || m < 1 || m > 12)) {
-        throw const McpToolError('floweringMonths must be months 1-12');
-      }
-      floweringMonths.addAll(months.cast<int>());
-    }
     final now = _clock().toUtc();
     final id = _newId();
     final payload = <String, Object?>{
@@ -958,13 +982,74 @@ class _Tools {
       'humidity': _optEnum(args, 'humidity', _humidityValues),
       'petToxicity':
           _optEnum(args, 'petToxicity', _petToxicityValues) ?? 'unknown',
-      'floweringMonths': floweringMonths.toList()..sort(),
+      'floweringMonths': _optMonths(args) ?? const <int>[],
       'careNotes': _optString(args, 'careNotes'),
       'createdAt': now.toIso8601String(),
     };
     await _sync.receiveChanges(grant.gardenId, grant.userId, grant.deviceId,
         [_change(grant, 'species', id, now, payload)]);
     return {'id': id, 'popularName': payload['popularName']};
+  }
+
+  Future<Map<String, Object?>> updateSpecies(
+      McpGrant grant, Map<String, Object?> args) async {
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final species = g.resolveSpecies(_reqString(args, 'species'));
+    final payload = {...species.payload};
+    final now = _clock().toUtc();
+    final changed = <String>[];
+
+    void set(String key, Object? value) {
+      // jsonEncode: lists compare by content, not identity.
+      if (jsonEncode(payload[key]) != jsonEncode(value)) changed.add(key);
+      payload[key] = value;
+    }
+
+    if (_optString(args, 'popularName') case final name?) {
+      set('popularName', name);
+    }
+    if (_optString(args, 'scientificName') case final name?) {
+      set('scientificName', name);
+    }
+    if (args.containsKey('defaultIrrigationFrequencyDays')) {
+      final raw = args['defaultIrrigationFrequencyDays'];
+      set(
+          'defaultIrrigationFrequencyDays',
+          raw == '' || raw == null
+              ? null
+              : _optInt(args, 'defaultIrrigationFrequencyDays',
+                  min: 1, max: 3650));
+    }
+    if (args.containsKey('light')) {
+      set('light', _optEnum(args, 'light', _lightValues)); // "" clears it
+    }
+    if (args.containsKey('humidity')) {
+      set('humidity', _optEnum(args, 'humidity', _humidityValues));
+    }
+    if (_optEnum(args, 'petToxicity', _petToxicityValues) case final value?) {
+      set('petToxicity', value);
+    }
+    if (_optMonths(args) case final months?) {
+      set('floweringMonths', months);
+    }
+    if (args.containsKey('careNotes')) {
+      set('careNotes', _optString(args, 'careNotes'));
+    }
+    if (_optStringList(args, 'recommendedSoilIds') case final soils?) {
+      soils.forEach(g.requireSoil);
+      set('recommendedSoilIds', soils.toSet().toList());
+    }
+
+    if (changed.isEmpty) {
+      return {'id': species.id, 'changed': <String>[]};
+    }
+    final applied = await _sync.receiveChanges(grant.gardenId, grant.userId,
+        grant.deviceId, [_change(grant, 'species', species.id, now, payload)]);
+    if (applied == 0) {
+      throw const McpToolError(
+          'not saved: the species has a newer edit; read it again and retry');
+    }
+    return {'id': species.id, 'changed': changed};
   }
 
   Future<Map<String, Object?>> createLocation(
@@ -1092,6 +1177,22 @@ class _Snapshot {
           '; use the short code');
     }
     throw McpToolError('plant not found: $ref');
+  }
+
+  StoredEntity resolveSpecies(String ref) {
+    final trimmed = ref.trim();
+    if (speciesById[trimmed] case final s?) return s;
+    final wanted = trimmed.toLowerCase();
+    final byName = species
+        .where((s) =>
+            '${s.payload['popularName']}'.toLowerCase() == wanted ||
+            '${s.payload['scientificName']}'.toLowerCase() == wanted)
+        .toList();
+    if (byName.length == 1) return byName.first;
+    throw McpToolError(byName.isEmpty
+        ? 'species not found: $ref'
+        : 'several species are named "$trimmed": '
+            '${byName.map((s) => s.id).join(', ')}; use the id');
   }
 
   StoredEntity resolveLocation(String ref) {
@@ -1355,6 +1456,16 @@ String? _optEnum(Map<String, Object?> args, String key, List<String> values) {
   return value;
 }
 
+/// `floweringMonths`: distinct months 1-12, sorted like the app stores them.
+List<int>? _optMonths(Map<String, Object?> args) {
+  final value = args['floweringMonths'];
+  if (value == null) return null;
+  if (value is! List || value.any((m) => m is! int || m < 1 || m > 12)) {
+    throw const McpToolError('floweringMonths must be months 1-12');
+  }
+  return value.cast<int>().toSet().toList()..sort();
+}
+
 String? _optDate(Map<String, Object?> args, String key) {
   final value = _optString(args, key);
   if (value == null) return null;
@@ -1395,3 +1506,11 @@ Map<String, Object?> _date(String description) =>
 
 Map<String, Object?> _enum(List<String> values, String description) =>
     {'type': 'string', 'enum': values, 'description': description};
+
+/// An enum where "" clears the field.
+Map<String, Object?> _clearableEnum(List<String> values, String description) =>
+    {
+      'type': 'string',
+      'enum': [...values, ''],
+      'description': '$description "" for none.',
+    };
