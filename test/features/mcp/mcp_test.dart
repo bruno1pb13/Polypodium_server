@@ -618,7 +618,8 @@ void main() {
         'material': 'ceramic',
         'locationId': 'loc2',
         'notes': null,
-        'createdAt': '2026-10-12T18:00:00.000Z',
+        // The test clock is local time: its UTC form depends on the zone.
+        'createdAt': DateTime(2026, 10, 12, 15).toUtc().toIso8601String(),
       });
       final pots = ok(await call('list_pots', {}))['pots'] as List;
       expect(pots.map((p) => (p as Map)['name']), contains('Cachepô'));
