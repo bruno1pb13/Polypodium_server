@@ -29,7 +29,7 @@ O [guia de instalação](docs/deploy.md) cobre o passo a passo completo: HTTPS c
 | Documento | Conteúdo |
 |---|---|
 | [Instalação e operação](docs/deploy.md) | Docker Compose, HTTPS/proxy reverso, primeiro admin, backups |
-| [API](docs/api.md) | Endpoints de autenticação, sincronização, fotos e administração |
+| [API](docs/api.md) | Endpoints de autenticação, sincronização, fotos, administração e MCP |
 | [Desenvolvimento](docs/desenvolvimento.md) | Rodar localmente, arquitetura, banco de dados, como contribuir |
 
 ## Desenvolvimento

@@ -244,6 +244,67 @@ Autenticada, com escopo de jardim (`X-Polypodium-Garden`, igual ao sync). Devolv
 
 Os erros vêm como `404` com um campo `code`: `weather_disabled`, `location_not_found` (inclui local excluído ou de outro jardim), `no_coordinates` ou `weather_pending` (ainda não houve busca para a região; tente depois).
 
+## MCP
+
+O servidor expõe um servidor [MCP](https://modelcontextprotocol.io) (Model Context Protocol) para que assistentes de IA (Claude Code, Claude Desktop, Cursor…) consultem e editem um jardim. **A conexão é por jardim:** cada token MCP pertence a um único jardim e a quem o criou, e o token sozinho define o jardim — não há `X-Polypodium-Garden`.
+
+### Tokens
+
+Criados pelo próprio membro, com o JWT do app. Valem até serem revogados; deixam de valer na hora se a conta for desativada/removida ou sair do jardim. O servidor só guarda o hash (SHA-256) do segredo.
+
+#### `GET /gardens/<id>/mcp-tokens`
+
+Qualquer membro vê os próprios tokens; o dono vê os de todos. O segredo nunca aparece aqui.
+
+```json
+{ "tokens": [
+  { "id": "…", "name": "Claude Desktop", "tokenPrefix": "pmcp_Eggl_L", "canWrite": true,
+    "createdAt": "…", "lastUsedAt": "…", "userId": "…", "email": "voce@exemplo.com" }
+] }
+```
+
+`lastUsedAt` é atualizado no máximo uma vez por minuto.
+
+#### `POST /gardens/<id>/mcp-tokens`
+
+Corpo `{ "name": "Claude Desktop", "canWrite": false }` (`name` com 1 a 100 caracteres; `canWrite` opcional, padrão `false`). Resposta `201` com os mesmos campos da listagem e mais `token` (`pmcp_…`), **mostrado só desta vez**. Limite de 20 tokens por membro por jardim (`409`).
+
+#### `DELETE /gardens/<id>/mcp-tokens/<tokenId>`
+
+Revoga (apaga) o token. O membro revoga os próprios; o dono, qualquer um. `404` para token inexistente ou de outra pessoa (se quem pede não é o dono).
+
+### Endpoint `POST /mcp`
+
+Transporte *Streamable HTTP* do MCP (revisões `2025-06-18` e `2025-03-26`), sem estado: cada mensagem JSON-RPC é um `POST` com `Authorization: Bearer pmcp_…`, e a resposta é JSON puro (sem SSE nem sessão). Notificações recebem `202`. `GET`/`DELETE` respondem `405`. Token ausente, inválido ou revogado: `401` com `WWW-Authenticate: Bearer`.
+
+Exemplo de configuração (Claude Code):
+
+```bash
+claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
+  --header "Authorization: Bearer pmcp_…"
+```
+
+### Ferramentas
+
+| Ferramenta | O que faz |
+|---|---|
+| `garden_overview` | Contagens, plantas com rega vencida, reaplicação de defensivo vencida, últimos registros |
+| `list_plants` | Plantas com espécie, local, vaso e estado da rega; filtros por texto, status, local, vaso, espécie e `needsWater` |
+| `get_plant` | Detalhes de uma planta: ficha da espécie, solo, lembretes e registros recentes |
+| `list_entries` | Registros do diário, mais recentes primeiro; por planta, tipo e intervalo de dias |
+| `list_species`, `list_locations`, `list_pots`, `list_soils`, `list_defensivos` | Catálogos |
+| `get_weather` | Previsão de um local (quando o admin ligou a previsão do tempo) |
+| `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso |
+| `delete_entry` ✎ | Exclui um registro (e as fotos dele) |
+| `create_plant` ✎, `update_plant` ✎ | Cria/edita planta (nome, status, espécie, solo, local, vaso, frequência de rega) |
+| `create_species` ✎, `create_location` ✎ | Cria espécie/local |
+
+✎ = só aparece para tokens com `canWrite: true`.
+
+Plantas podem ser indicadas pelo id, pelo código curto de 6 caracteres da etiqueta (`#ABC123`) ou pelo apelido exato. O estado da rega considera a data mais recente entre `lastIrrigatedAt` da planta e o último registro de rega.
+
+**Escritas:** o MCP grava pelo mesmo caminho do `POST /sync/receive` (LWW), como mais um dispositivo, com `deviceId` `mcp-<tokenId>`, e no mesmo formato de payload do app. Os aparelhos recebem as mudanças no próximo pull. Referências (espécie, solo, local, vaso, planta) são validadas antes de gravar. Datas só com o dia (`2026-10-12`) viram meio-dia daquele dia, sem fuso, para não mudarem de dia em nenhum fuso horário. Ao excluir um registro de rega ou de defensivo, o servidor também recalcula a última rega/aplicação da planta, porque o app só faz esse recálculo quando recebe um registro novo.
+
 ## Saúde
 
 ### `GET /health`

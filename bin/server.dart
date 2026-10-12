@@ -13,6 +13,12 @@ import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/admin/settings_repository.dart';
 import 'package:polypodium_server/features/gardens/garden_handler.dart';
 import 'package:polypodium_server/features/gardens/garden_repository.dart';
+import 'package:polypodium_server/features/mcp/garden_store.dart';
+import 'package:polypodium_server/features/mcp/mcp_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_server.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_repository.dart';
+import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
@@ -57,15 +63,30 @@ void main() async {
   final releases = ReleaseChecker(_serverVersion);
   if (Config.updateCheckEnabled) releases.start();
   final serverStartedAt = DateTime.now();
+  final syncRepo = SyncRepository(pool);
+  final weatherHandler = WeatherHandler(weather, weatherRepo);
+  final mcpTokenRepo = McpTokenRepository(pool);
+  final mcpServer = McpServer(
+    polypodiumTools(
+      store: GardenStore(pool),
+      sync: syncRepo,
+      forecast: weatherHandler.forecast,
+    ),
+    version: _serverVersion,
+    instructions: mcpInstructions,
+  );
   final router = buildRouter(
     auth: AuthHandler(authRepo, tokens),
-    sync: SyncHandler(SyncRepository(pool)),
+    sync: SyncHandler(syncRepo),
     photos: PhotoHandler(Config.photosDir),
     admin: AdminHandler(
         authRepo, settingsRepo, serverStartedAt, _serverVersion,
         weather: weather, releases: releases),
     gardens: GardenHandler(gardenRepo, authRepo),
-    weather: WeatherHandler(weather, weatherRepo),
+    weather: weatherHandler,
+    mcp: McpHandler(mcpServer),
+    mcpTokens: McpTokenHandler(mcpTokenRepo, gardenRepo),
+    mcpTokenRepo: mcpTokenRepo,
     gardenRepo: gardenRepo,
     authRepo: authRepo,
     tokens: tokens,

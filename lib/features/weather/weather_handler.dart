@@ -6,6 +6,12 @@ import 'weather_models.dart';
 import 'weather_repository.dart';
 import 'weather_service.dart';
 
+/// A forecast body, or the code and message of why there is none.
+typedef ForecastResult = ({
+  Map<String, Object?>? body,
+  ({String code, String message})? error,
+});
+
 class WeatherHandler {
   const WeatherHandler(this._service, this._repo);
   final WeatherService _service;
@@ -19,41 +25,64 @@ class WeatherHandler {
   /// Regions are shared across gardens, so their center -- possibly another
   /// account's location -- is never part of the response.
   Future<Response> forLocation(Request request, String id) async {
+    final params = request.url.queryParameters;
+    final result = await forecast(
+      request.context['gardenId'] as String,
+      id,
+      days: int.tryParse(params['days'] ?? '') ?? 7,
+      months: int.tryParse(params['months'] ?? '') ?? 0,
+    );
+    final error = result.error;
+    if (error != null) return _error(404, error.code, error.message);
+    return _json(200, result.body!);
+  }
+
+  /// The body of [forLocation], or why there is none (always a 404 there).
+  /// Shared with the MCP `get_weather` tool.
+  Future<ForecastResult> forecast(
+    String gardenId,
+    String id, {
+    int days = 7,
+    int months = 0,
+  }) async {
+    ForecastResult fail(String code, String message) =>
+        (body: null, error: (code: code, message: message));
+
     if (!await _service.isEnabled()) {
-      return _error(404, 'weather_disabled', 'weather is disabled');
+      return fail('weather_disabled', 'weather is disabled');
     }
-    final gardenId = request.context['gardenId'] as String;
 
     final location = await _repo.locationInGarden(gardenId, id);
     if (!location.found) {
-      return _error(404, 'location_not_found', 'location not found');
+      return fail('location_not_found', 'location not found');
     }
     final lat = location.latitude;
     final lon = location.longitude;
     if (lat == null || lon == null || !isValidCoordinate(lat, lon)) {
-      return _error(404, 'no_coordinates', 'location has no coordinates');
+      return fail('no_coordinates', 'location has no coordinates');
     }
 
     final region = await _service.regionFor(lat, lon);
     if (region == null || region.lastFetchedAt == null) {
-      return _error(404, 'weather_pending',
-          'no forecast for this location yet; try again later');
+      return fail(
+          'weather_pending', 'no forecast for this location yet; try again later');
     }
 
-    final params = request.url.queryParameters;
-    final days = (int.tryParse(params['days'] ?? '') ?? 7)
-        .clamp(0, _service.options.dailyRetentionDays + 31);
-    final months = (int.tryParse(params['months'] ?? '') ?? 0).clamp(0, 600);
+    final clampedDays = days.clamp(0, _service.options.dailyRetentionDays + 31);
+    final clampedMonths = months.clamp(0, 600);
 
-    return _json(200, {
-      'locationId': id,
-      'timezone': region.timezone,
-      'elevation': region.elevation,
-      'fetchedAt': region.lastFetchedAt!.toUtc().toIso8601String(),
-      'hourly': await _repo.hourly(region.id),
-      'daily': await _repo.daily(region.id, days),
-      'monthly': await _repo.monthly(region.id, months),
-    });
+    return (
+      body: <String, Object?>{
+        'locationId': id,
+        'timezone': region.timezone,
+        'elevation': region.elevation,
+        'fetchedAt': region.lastFetchedAt!.toUtc().toIso8601String(),
+        'hourly': await _repo.hourly(region.id),
+        'daily': await _repo.daily(region.id, clampedDays),
+        'monthly': await _repo.monthly(region.id, clampedMonths),
+      },
+      error: null,
+    );
   }
 }
 
