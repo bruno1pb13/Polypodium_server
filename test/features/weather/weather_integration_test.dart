@@ -20,6 +20,12 @@ import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/gardens/garden_handler.dart';
 import 'package:polypodium_server/features/gardens/garden_repository.dart';
+import 'package:polypodium_server/features/mcp/garden_store.dart';
+import 'package:polypodium_server/features/mcp/mcp_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_server.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_repository.dart';
+import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
@@ -136,6 +142,11 @@ void main() {
           weather: service),
       gardens: GardenHandler(gardenRepo, authRepo),
       weather: WeatherHandler(service, repo),
+      mcp: McpHandler(McpServer(
+          polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
+          version: 'test')),
+      mcpTokens: McpTokenHandler(McpTokenRepository(db), gardenRepo),
+      mcpTokenRepo: McpTokenRepository(db),
       gardenRepo: gardenRepo,
       authRepo: authRepo,
       tokens: tokens,

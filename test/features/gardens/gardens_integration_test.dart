@@ -17,6 +17,12 @@ import 'package:polypodium_server/features/auth/auth_handler.dart';
 import 'package:polypodium_server/features/auth/auth_repository.dart';
 import 'package:polypodium_server/features/gardens/garden_handler.dart';
 import 'package:polypodium_server/features/gardens/garden_repository.dart';
+import 'package:polypodium_server/features/mcp/garden_store.dart';
+import 'package:polypodium_server/features/mcp/mcp_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_server.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_handler.dart';
+import 'package:polypodium_server/features/mcp/mcp_token_repository.dart';
+import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
@@ -67,6 +73,11 @@ void main() {
           WeatherService(WeatherRepository(db), SettingsRepository(db),
               OpenMeteoProvider('http://localhost:9')),
           WeatherRepository(db)),
+      mcp: McpHandler(McpServer(
+          polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
+          version: 'test')),
+      mcpTokens: McpTokenHandler(McpTokenRepository(db), gardenRepo),
+      mcpTokenRepo: McpTokenRepository(db),
       gardenRepo: gardenRepo,
       authRepo: authRepo,
       tokens: tokens,
@@ -516,6 +527,166 @@ void main() {
             'X-Polypodium-Garden': gardenId,
           }));
       expect(await photo.read().expand((b) => b).toList(), [7]);
+    });
+  });
+
+  group('MCP', () {
+    Future<_Res> mcp(String token, String method,
+        [Map<String, Object?>? params]) async {
+      final res = await app(Request(
+        'POST',
+        Uri.parse('http://localhost/api/v1/mcp'),
+        headers: {'Authorization': 'Bearer $token'},
+        body: jsonEncode({
+          'jsonrpc': '2.0',
+          'id': 1,
+          'method': method,
+          if (params != null) 'params': params,
+        }),
+      ));
+      final text = await res.readAsString();
+      final decoded = text.isEmpty ? null : jsonDecode(text);
+      return (
+        status: res.statusCode,
+        body: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{},
+      );
+    }
+
+    Future<Map<String, dynamic>> tool(
+        String token, String name, Map<String, Object?> args) async {
+      final res =
+          await mcp(token, 'tools/call', {'name': name, 'arguments': args});
+      expect(res.status, 200, reason: '${res.body}');
+      return res.body['result'] as Map<String, dynamic>;
+    }
+
+    Future<Map<String, dynamic>> newToken(_Account by, String garden,
+        {bool canWrite = false}) async {
+      final res = await send('POST', '/gardens/$garden/mcp-tokens',
+          as: by, body: {'name': 'Claude', 'canWrite': canWrite});
+      expect(res.status, 201, reason: '${res.body}');
+      return res.body;
+    }
+
+    test('a token reads and writes only its garden, like a synced peer',
+        () async {
+      if (skip()) return;
+      final owner = await account();
+      final member = await account();
+      final garden = await createGarden(owner, 'Horta');
+      await send('POST', '/gardens/$garden/members',
+          as: owner, body: {'email': member.email});
+
+      await push(owner, [
+        change(owner, 'species', 'sp-mcp', {
+          'popularName': 'Manjericão',
+          'scientificName': 'Ocimum basilicum',
+          'defaultIrrigationFrequencyDays': 2,
+          'createdAt': '2026-01-01T00:00:00.000',
+        }),
+        change(owner, 'plant', 'p-mcp', {
+          'nickname': 'Basil',
+          'speciesId': 'sp-mcp',
+          'soilId': 'loamy',
+          'status': 'active',
+          'acquisitionDate': '2026-01-01T00:00:00.000',
+          'createdAt': '2026-01-01T00:00:00.000',
+        }),
+      ], garden: garden);
+      // Same id in the personal garden: must stay invisible to the token.
+      await push(owner, [
+        change(owner, 'plant', 'p-personal', {'nickname': 'Private'}),
+      ]);
+
+      final created = await newToken(member, garden, canWrite: true);
+      final secret = created['token'] as String;
+      expect(secret, startsWith('pmcp_'));
+
+      final init = await mcp(secret, 'initialize', {
+        'protocolVersion': '2025-06-18',
+        'capabilities': {},
+        'clientInfo': {'name': 'test', 'version': '0'},
+      });
+      expect(init.status, 200);
+      expect((init.body['result'] as Map)['serverInfo']['name'], 'polypodium');
+
+      final plants = await tool(secret, 'list_plants', {});
+      final listed = (plants['structuredContent'] as Map)['plants'] as List;
+      expect(listed.map((p) => p['nickname']), ['Basil']);
+
+      final added = await tool(secret, 'add_entry',
+          {'plants': ['Basil'], 'type': 'irrigation', 'note': 'via MCP'});
+      expect(added['isError'], false, reason: '$added');
+
+      // The owner's device pulls the entry as another peer's write.
+      final pulled = await send('GET', '/sync/changes?since=0&limit=100',
+          as: owner, garden: garden);
+      final entry = (pulled.body['changes'] as List)
+          .singleWhere((c) => c['entityType'] == 'entry');
+      expect(entry['deviceId'], 'mcp-${created['id']}');
+      expect(entry['payload']['note'], 'via MCP');
+      expect(entry['payload']['plantId'], 'p-mcp');
+
+      // Read-only tokens don't get write tools.
+      final readOnly = await newToken(member, garden);
+      final denied = await mcp(readOnly['token'] as String, 'tools/call', {
+        'name': 'add_entry',
+        'arguments': {'plants': ['Basil'], 'type': 'irrigation'},
+      });
+      expect((denied.body['error'] as Map)['code'], -32602);
+    });
+
+    test('tokens are listed, revoked and die with the membership', () async {
+      if (skip()) return;
+      final owner = await account();
+      final member = await account();
+      final outsider = await account();
+      final garden = await createGarden(owner, 'Estufa');
+      await send('POST', '/gardens/$garden/members',
+          as: owner, body: {'email': member.email});
+
+      final ownerToken = await newToken(owner, garden);
+      final memberToken = await newToken(member, garden);
+
+      expect(
+          (await send('POST', '/gardens/$garden/mcp-tokens',
+                  as: outsider, body: {'name': 'x'}))
+              .status,
+          404);
+      expect(
+          (await mcp('pmcp_not-a-real-token', 'ping')).status, 401);
+
+      // A member sees only their own tokens; the owner sees all, never
+      // the secret.
+      final mine =
+          await send('GET', '/gardens/$garden/mcp-tokens', as: member);
+      expect((mine.body['tokens'] as List).map((t) => t['id']),
+          [memberToken['id']]);
+      final all = await send('GET', '/gardens/$garden/mcp-tokens', as: owner);
+      expect(all.body['tokens'] as List, hasLength(2));
+      expect((all.body['tokens'] as List).first.containsKey('token'), isFalse);
+
+      // A member can't revoke the owner's token.
+      expect(
+          (await send('DELETE',
+                  '/gardens/$garden/mcp-tokens/${ownerToken['id']}',
+                  as: member))
+              .status,
+          404);
+      expect((await mcp(memberToken['token'] as String, 'ping')).status, 200);
+
+      // Leaving the garden kills the member's token without revoking it.
+      await send('DELETE', '/gardens/$garden/members/${member.id}', as: member);
+      expect((await mcp(memberToken['token'] as String, 'ping')).status, 401);
+
+      // Revoked tokens stop working at once.
+      expect(
+          (await send('DELETE',
+                  '/gardens/$garden/mcp-tokens/${ownerToken['id']}',
+                  as: owner))
+              .status,
+          200);
+      expect((await mcp(ownerToken['token'] as String, 'ping')).status, 401);
     });
   });
 }

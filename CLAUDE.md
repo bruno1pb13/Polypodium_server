@@ -48,6 +48,7 @@ shelf Pipeline
   errorMiddleware → corsMiddleware → logRequests
     Router /api/v1/auth/*   → AuthHandler   (no auth required)
     Router /api/v1/sync/*   → authMiddleware → SyncHandler
+    Router /api/v1/mcp      → mcpAuthMiddleware → McpHandler (MCP token, not JWT)
     GET /health
 ```
 
@@ -77,6 +78,10 @@ There is no explicit conflict detection/UI — merges are always resolved determ
 ### Weather
 
 `WeatherService` (started in `main`) runs hourly while the `weather_enabled` server setting is on. It clusters the coordinates of every live `mat_locations` row (all gardens) into `weather_regions`. A coordinate joins the nearest region whose fixed center is within `clusterRadiusKm`; otherwise it creates a new region centered on itself. The service fetches each region in use from Open-Meteo (`IWeatherProvider`, faked in tests) about once a day, and then `WeatherRepository.housekeeping` thins the data: `weather_hourly` keeps the last few days, `weather_daily` drops whole months past the retention after rolling them into `weather_monthly`, and idle regions are deleted (cascade). A session advisory lock keeps two instances from running the job at once. `GET /weather/locations/<id>` resolves the location within the caller's garden. It never returns region coordinates, because a region can be shared with other accounts' locations.
+
+### MCP
+
+`POST /api/v1/mcp` is a stateless MCP server (Streamable HTTP, plain JSON responses, no SSE or sessions). The connection is per garden: it authenticates with an MCP token (`pmcp_…`, managed under `/gardens/<id>/mcp-tokens`, stored as SHA-256 in `mcp_tokens`). Each token is bound to one garden and to the member who created it. `mcpAuthMiddleware` resolves the token on every request and rejects it once the account is disabled or leaves the garden, then injects an `McpGrant`; the token alone selects the garden. `McpServer` is the transport-independent JSON-RPC side, and `polypodiumTools` defines the tools. Reads go through `GardenStore` (live `mat_*` rows). Writes build payloads in the app's sync shape and go through `SyncRepository.receiveChanges` with deviceId `mcp-<tokenId>`, so devices pull them like any peer's edits. Write tools are only listed for tokens with `can_write`. When the app's payload shape or its derived fields change (see `drift_sync_storage_adapter.dart` in the app), update `polypodium_tools.dart` to match.
 
 ### Server version and update notice
 

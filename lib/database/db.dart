@@ -149,6 +149,27 @@ Future<void> _runMigrations(Session pool) async {
     )
   '''));
 
+  // Access tokens for the MCP endpoint. Each one is bound to a single
+  // garden (the MCP "connection" is per garden) and to the member who
+  // created it, whose account and membership are re-checked on every
+  // request. Only a SHA-256 of the secret is stored; `token_prefix` lets
+  // the user tell their tokens apart. Revoking deletes the row.
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS mcp_tokens (
+      id           TEXT PRIMARY KEY,
+      garden_id    TEXT NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+      user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL,
+      token_hash   TEXT NOT NULL UNIQUE,
+      token_prefix TEXT NOT NULL,
+      can_write    BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ
+    )
+  '''));
+  await pool.execute(Sql(
+      'CREATE INDEX IF NOT EXISTS idx_mcp_tokens_garden ON mcp_tokens(garden_id)'));
+
   // Weather forecasts. Nearby locations share a region (one fetch for all
   // of them); data thins out with age: hourly for the last few days, daily
   // for about a year, monthly summaries after that. Hours and dates are the
