@@ -12,6 +12,31 @@ class StoredEntity {
   final DateTime updatedAt;
 }
 
+/// A photo of an entry, as the server stores it: the entry's own photo
+/// (whose id is the entry id) or one of its extra `entry_photo` rows. The
+/// file is `photoKey` in the garden's photo directory.
+class PhotoRef {
+  const PhotoRef({
+    required this.id,
+    required this.entryId,
+    required this.plantId,
+    required this.photoKey,
+    required this.date,
+    required this.entryType,
+    this.note,
+  });
+
+  final String id;
+  final String entryId;
+  final String plantId;
+  final String photoKey;
+
+  /// The entry's `date`.
+  final String date;
+  final String entryType;
+  final String? note;
+}
+
 /// Read access to one garden's synced data for the MCP tools. Writes go
 /// through [ISyncRepository.receiveChanges], the same LWW path devices use.
 abstract interface class IGardenStore {
@@ -33,6 +58,16 @@ abstract interface class IGardenStore {
 
   /// The latest `date` of a live entry of [type], per plant id.
   Future<Map<String, String>> lastEntryDates(String gardenId, String type);
+
+  /// Live photos of one plant's entries, or the ones with [photoIds];
+  /// newest entry first, then in the entry's order. Like the app, extra
+  /// photos only count for an entry that has its own.
+  Future<List<PhotoRef>> photos(
+    String gardenId, {
+    String? plantId,
+    List<String>? photoIds,
+    int? limit,
+  });
 }
 
 const _tables = {
@@ -129,6 +164,64 @@ class GardenStore implements IGardenStore {
       for (final row in result)
         if (row[0] != null && row[1] != null) row[0] as String: row[1] as String,
     };
+  }
+
+  @override
+  Future<List<PhotoRef>> photos(
+    String gardenId, {
+    String? plantId,
+    List<String>? photoIds,
+    int? limit,
+  }) async {
+    final result = await _db.execute(
+      Sql.named('''
+        WITH entries AS (
+          SELECT entity_id, payload FROM mat_entries
+          WHERE garden_id = @gardenId AND deleted_at IS NULL
+            AND payload->>'photoKey' IS NOT NULL
+            AND (@plantId::text IS NULL
+                 OR payload->>'plantId' = @plantId::text)
+        ), photos AS (
+          SELECT e.entity_id AS id, e.entity_id AS entry_id,
+                 e.payload->>'photoKey' AS photo_key, -1 AS position,
+                 e.payload AS entry
+          FROM entries e
+          UNION ALL
+          SELECT p.entity_id, e.entity_id, p.payload->>'photoKey',
+                 CASE WHEN jsonb_typeof(p.payload->'position') = 'number'
+                      THEN (p.payload->>'position')::int ELSE 0 END,
+                 e.payload
+          FROM mat_entry_photos p
+          JOIN entries e ON e.entity_id = p.payload->>'entryId'
+          WHERE p.garden_id = @gardenId AND p.deleted_at IS NULL
+            AND p.payload->>'photoKey' IS NOT NULL
+        )
+        SELECT id, entry_id, entry->>'plantId', photo_key, entry->>'date',
+               entry->>'type', entry->>'note'
+        FROM photos
+        WHERE @photoIds::text[] IS NULL OR id = ANY(@photoIds::text[])
+        ORDER BY entry->>'date' DESC, entry_id, position, id
+        LIMIT @limit
+      '''),
+      parameters: {
+        'gardenId': gardenId,
+        'plantId': plantId,
+        'photoIds': photoIds,
+        'limit': limit ?? 1000,
+      },
+    );
+    return [
+      for (final row in result)
+        PhotoRef(
+          id: row[0] as String,
+          entryId: row[1] as String,
+          plantId: row[2] as String? ?? '',
+          photoKey: row[3] as String,
+          date: row[4] as String? ?? '',
+          entryType: row[5] as String? ?? '',
+          note: row[6] as String?,
+        ),
+    ];
   }
 
   static String _table(String entityType) {

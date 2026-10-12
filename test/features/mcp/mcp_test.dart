@@ -52,6 +52,16 @@ class _FakeStore implements IGardenStore {
   }
 
   @override
+  Future<List<PhotoRef>> photos(String gardenId,
+          {String? plantId, List<String>? photoIds, int? limit}) async =>
+      _allPhotos()
+          .where((p) =>
+              (plantId == null || p.plantId == plantId) &&
+              (photoIds == null || photoIds.contains(p.id)))
+          .take(limit ?? 1000)
+          .toList();
+
+  @override
   Future<Map<String, String>> lastEntryDates(
       String gardenId, String type) async {
     final result = <String, String>{};
@@ -62,6 +72,35 @@ class _FakeStore implements IGardenStore {
       if ((result[plantId] ?? '').compareTo(date) < 0) result[plantId] = date;
     }
     return result;
+  }
+}
+
+extension on _FakeStore {
+  List<PhotoRef> _allPhotos() {
+    final entries = (rows['entry'] ?? {}).values
+        .where((e) => e.payload['photoKey'] != null)
+        .toList()
+      ..sort((a, b) =>
+          (b.payload['date'] as String).compareTo(a.payload['date'] as String));
+    PhotoRef ref(String id, StoredEntity e, String key) => PhotoRef(
+          id: id,
+          entryId: e.id,
+          plantId: e.payload['plantId'] as String,
+          photoKey: key,
+          date: e.payload['date'] as String,
+          entryType: e.payload['type'] as String,
+          note: e.payload['note'] as String?,
+        );
+    return [
+      for (final e in entries) ...[
+        ref(e.id, e, e.payload['photoKey'] as String),
+        for (final p in (rows['entry_photo'] ?? {}).values.toList()
+          ..sort((a, b) => (a.payload['position'] as int)
+              .compareTo(b.payload['position'] as int)))
+          if (p.payload['entryId'] == e.id)
+            ref(p.id, e, p.payload['photoKey'] as String),
+      ],
+    ];
   }
 }
 
@@ -108,6 +147,7 @@ const _deadFern = 'cccccccc-0000-4000-8000-000000000003';
 void main() {
   late _FakeStore store;
   late McpServer server;
+  late List<String> loaded;
   var nextId = 0;
 
   setUp(() {
@@ -163,11 +203,36 @@ void main() {
         'type': 'irrigation',
         'date': '2026-10-10T09:00:00.000',
         'createdAt': '2026-10-10T09:00:00.000',
+      })
+      ..put('entry', 'e3', {
+        'plantId': _cactus,
+        'type': 'observation',
+        'date': '2026-09-01T09:00:00.000',
+        'note': 'first flower',
+        'photoKey': 'e3.jpg',
+        'createdAt': '2026-09-01T09:00:00.000',
+      })
+      ..put('entry_photo', 'ep1', {
+        'entryId': 'e3',
+        'photoKey': 'ep1.jpg',
+        'position': 0,
+      })
+      ..put('entry', 'e4', {
+        'plantId': _cactus,
+        'type': 'observation',
+        'date': '2026-10-02T09:00:00.000',
+        'photoKey': 'e4.jpg',
+        'createdAt': '2026-10-02T09:00:00.000',
       });
+    loaded = [];
     server = McpServer(
       polypodiumTools(
         store: store,
         sync: _FakeSync(store),
+        photos: (gardenId, key, maxSide) async {
+          loaded.add('$gardenId/$key@$maxSide');
+          return key == 'gone.jpg' ? null : McpImage([1, 2, 3], 'image/jpeg');
+        },
         clock: () => DateTime(2026, 10, 12, 15),
       ),
       version: 'test',
@@ -296,6 +361,71 @@ void main() {
           contains('limit'));
       expect(errorText(await call('list_entries', {'from': '12/10/2026'})),
           contains('YYYY-MM-DD'));
+    });
+  });
+
+  group('photos', () {
+    test('get_plant attaches the cover photo, small', () async {
+      final result = await call('get_plant', {'plant': 'Spiky'});
+      final data = ok(result);
+      expect(data['photoCount'], 3);
+      // No cover picked: the newest entry's own photo.
+      expect((data['coverPhoto'] as Map)['photoId'], 'e4');
+      final content = result['content'] as List;
+      expect(content[1], {
+        'type': 'image',
+        'data': base64Encode([1, 2, 3]),
+        'mimeType': 'image/jpeg',
+      });
+      expect(loaded, ['g1/e4.jpg@512']);
+
+      loaded.clear();
+      final plain = await call(
+          'get_plant', {'plant': 'Spiky', 'includeCoverImage': false});
+      expect(plain['content'] as List, hasLength(1));
+      expect(loaded, isEmpty);
+    });
+
+    test('a picked cover wins while it exists', () async {
+      store.rows['plant']![_cactus]!.payload['coverPhotoId'] = 'ep1';
+      final data = ok(await call('list_plant_photos', {'plant': 'Spiky'}));
+      expect(data['total'], 3);
+      expect([for (final p in data['photos'] as List) p['photoId']],
+          ['e4', 'e3', 'ep1']);
+      expect([for (final p in data['photos'] as List) p['isCover']],
+          [false, false, true]);
+      expect((data['photos'] as List)[2]['note'], 'first flower');
+    });
+
+    test('get_photos returns images in order and names the missing ones',
+        () async {
+      final result = await call('get_photos', {
+        'photoIds': ['ep1', 'nope', 'e3'],
+        'size': 'large',
+      });
+      final data = ok(result);
+      expect([for (final p in data['photos'] as List) p['photoId']],
+          ['ep1', 'e3']);
+      expect(data['notFound'], ['nope']);
+      expect((result['content'] as List).skip(1).map((c) => c['type']),
+          ['image', 'image']);
+      expect(loaded, ['g1/ep1.jpg@1568', 'g1/e3.jpg@1568']);
+    });
+
+    test('get_photos limits how many and fails when none load', () async {
+      expect(
+          errorText(await call('get_photos', {
+            'photoIds': [for (var i = 0; i < 7; i++) 'p$i'],
+          })),
+          contains('at most'));
+      expect(errorText(await call('get_photos', {'photoIds': ['nope']})),
+          contains('no photo found'));
+    });
+
+    test('entries say whether they have a photo', () async {
+      final data = ok(await call('list_entries', {'plant': 'Spiky'}));
+      expect([for (final e in data['entries'] as List) e['hasPhoto']],
+          [true, true]);
     });
   });
 

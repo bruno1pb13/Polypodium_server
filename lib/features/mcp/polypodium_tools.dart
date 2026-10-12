@@ -8,6 +8,7 @@ import '../weather/weather_handler.dart';
 import 'garden_store.dart';
 import 'i_mcp_token_repository.dart';
 import 'mcp_server.dart';
+import 'photo_renderer.dart';
 
 /// Looks up a location's forecast (see [WeatherHandler.forecast]).
 typedef ForecastLookup = Future<ForecastResult> Function(
@@ -71,6 +72,11 @@ const _seededSoilIds = {
 };
 
 const _defaultSoilId = 'pottingMix';
+
+/// Longest side, in pixels, of each photo size `get_photos` offers. Large
+/// is the most Claude looks at without downscaling it itself.
+const _photoSizes = {'small': 512, 'medium': 1024, 'large': 1568};
+const _maxPhotosPerCall = 6;
 const _shortCodeLength = 6;
 
 const mcpInstructions = '''
@@ -89,9 +95,10 @@ List<McpTool> polypodiumTools({
   required IGardenStore store,
   required ISyncRepository sync,
   ForecastLookup? forecast,
+  PhotoLoader? photos,
   DateTime Function() clock = DateTime.now,
 }) {
-  final tools = _Tools(store, sync, forecast, clock);
+  final tools = _Tools(store, sync, forecast, photos, clock);
   return [
     McpTool(
       name: 'garden_overview',
@@ -100,7 +107,7 @@ List<McpTool> polypodiumTools({
           'species, locations and pots; active plants due for watering or '
           'for a pesticide reapplication; and the latest entries.',
       inputSchema: _schema({}),
-      run: tools.overview,
+      run: _json(tools.overview),
     ),
     McpTool(
       name: 'list_plants',
@@ -118,16 +125,21 @@ List<McpTool> polypodiumTools({
         'limit': _integer('Max plants returned (default 50, max 200).'),
         'offset': _integer('Plants to skip, for paging.'),
       }),
-      run: tools.listPlants,
+      run: _json(tools.listPlants),
     ),
     McpTool(
       name: 'get_plant',
       title: 'Get plant',
       description: 'Full details of one plant: species care sheet, soil, '
-          'location, pot, reminders and its most recent entries.',
+          'location, pot, reminders, its most recent entries, how many photos '
+          'it has and, by default, its cover photo as an image. Use '
+          'list_plant_photos and get_photos for the others.',
       inputSchema: _schema({
         'plant': _string('Plant id, short code or exact nickname.'),
         'entriesLimit': _integer('Recent entries to include (default 20).'),
+        if (photos != null)
+          'includeCoverImage':
+              _boolean('Attach the cover photo (default true).'),
       }, required: ['plant']),
       run: tools.getPlant,
     ),
@@ -143,7 +155,7 @@ List<McpTool> polypodiumTools({
         'until': _date('Last day included (YYYY-MM-DD).'),
         'limit': _integer('Max entries (default 50, max 500).'),
       }),
-      run: tools.listEntries,
+      run: _json(tools.listEntries),
     ),
     McpTool(
       name: 'list_species',
@@ -152,7 +164,7 @@ List<McpTool> polypodiumTools({
           'each.',
       inputSchema: _schema({'query': _string('Matches popular or scientific '
           'name.')}),
-      run: tools.listSpecies,
+      run: _json(tools.listSpecies),
     ),
     McpTool(
       name: 'list_locations',
@@ -160,7 +172,7 @@ List<McpTool> polypodiumTools({
       description: 'Locations (rooms, beds, balconies...) with coordinates '
           'and plant/pot counts.',
       inputSchema: _schema({}),
-      run: tools.listLocations,
+      run: _json(tools.listLocations),
     ),
     McpTool(
       name: 'list_pots',
@@ -169,14 +181,14 @@ List<McpTool> polypodiumTools({
       inputSchema: _schema({
         'locationId': _string('Only pots in this location.'),
       }),
-      run: tools.listPots,
+      run: _json(tools.listPots),
     ),
     McpTool(
       name: 'list_soils',
       title: 'List soils',
       description: 'Soil types and substrates known to the garden.',
       inputSchema: _schema({}),
-      run: tools.listSoils,
+      run: _json(tools.listSoils),
     ),
     McpTool(
       name: 'list_defensivos',
@@ -184,7 +196,7 @@ List<McpTool> polypodiumTools({
       description: 'Pesticide/defensive products catalog (defensivos), with '
           'category and withholding period (carência) in days.',
       inputSchema: _schema({}),
-      run: tools.listDefensivos,
+      run: _json(tools.listDefensivos),
     ),
     if (forecast != null)
       McpTool(
@@ -196,8 +208,40 @@ List<McpTool> polypodiumTools({
           'location': _string('Location id or exact name.'),
           'days': _integer('Past days of daily history (default 3).'),
         }, required: ['location']),
-        run: tools.weather,
+        run: _json(tools.weather),
       ),
+    if (photos != null) ...[
+      McpTool(
+        name: 'list_plant_photos',
+        title: 'List plant photos',
+        description: 'A plant\'s photos, newest first, with the entry each '
+            'belongs to (date, type, note). Fetch the images with '
+            'get_photos.',
+        inputSchema: _schema({
+          'plant': _string('Plant id, short code or exact nickname.'),
+          'limit': _integer('Max photos (default 50, max 500).'),
+        }, required: ['plant']),
+        run: _json(tools.listPlantPhotos),
+      ),
+      McpTool(
+        name: 'get_photos',
+        title: 'Get photos',
+        description: 'Returns up to $_maxPhotosPerCall photos as images, '
+            'scaled down: small (512 px), medium (1024 px, default) or large '
+            '(1568 px) on the longest side. Photo ids come from '
+            'list_plant_photos, get_plant or list_entries.',
+        inputSchema: _schema({
+          'photoIds': {
+            'type': 'array',
+            'items': {'type': 'string'},
+            'minItems': 1,
+            'maxItems': _maxPhotosPerCall,
+          },
+          'size': _enum(_photoSizes.keys.toList(), 'Default: medium.'),
+        }, required: ['photoIds']),
+        run: tools.getPhotos,
+      ),
+    ],
     McpTool(
       name: 'add_entry',
       title: 'Add entry',
@@ -224,7 +268,7 @@ List<McpTool> polypodiumTools({
         'details': {'type': 'object'},
       }, required: ['type']),
       writes: true,
-      run: tools.addEntry,
+      run: _json(tools.addEntry),
     ),
     McpTool(
       name: 'delete_entry',
@@ -235,7 +279,7 @@ List<McpTool> polypodiumTools({
       }, required: ['entryId']),
       writes: true,
       destructive: true,
-      run: tools.deleteEntry,
+      run: _json(tools.deleteEntry),
     ),
     McpTool(
       name: 'create_plant',
@@ -253,7 +297,7 @@ List<McpTool> polypodiumTools({
         'parentPlantId': _string('Plant it was propagated from.'),
       }, required: ['nickname', 'speciesId']),
       writes: true,
-      run: tools.createPlant,
+      run: _json(tools.createPlant),
     ),
     McpTool(
       name: 'update_plant',
@@ -278,7 +322,7 @@ List<McpTool> polypodiumTools({
         },
       }, required: ['plant']),
       writes: true,
-      run: tools.updatePlant,
+      run: _json(tools.updatePlant),
     ),
     McpTool(
       name: 'create_species',
@@ -303,7 +347,7 @@ List<McpTool> polypodiumTools({
         },
       }, required: ['popularName', 'scientificName']),
       writes: true,
-      run: tools.createSpecies,
+      run: _json(tools.createSpecies),
     ),
     McpTool(
       name: 'create_location',
@@ -316,16 +360,17 @@ List<McpTool> polypodiumTools({
         'longitude': {'type': 'number'},
       }, required: ['name']),
       writes: true,
-      run: tools.createLocation,
+      run: _json(tools.createLocation),
     ),
   ];
 }
 
 class _Tools {
-  _Tools(this._store, this._sync, this._forecast, this._clock);
+  _Tools(this._store, this._sync, this._forecast, this._photos, this._clock);
   final IGardenStore _store;
   final ISyncRepository _sync;
   final ForecastLookup? _forecast;
+  final PhotoLoader? _photos;
   final DateTime Function() _clock;
 
   // -- reads -----------------------------------------------------------------
@@ -397,7 +442,7 @@ class _Tools {
     };
   }
 
-  Future<Map<String, Object?>> getPlant(
+  Future<McpToolResult> getPlant(
       McpGrant grant, Map<String, Object?> args) async {
     final g = await _Snapshot.load(_store, grant.gardenId);
     final plant = g.resolvePlant(_reqString(args, 'plant'));
@@ -412,7 +457,15 @@ class _Tools {
         : await _store.entries(grant.gardenId,
             plantIds: {plant.id}, limit: entriesLimit);
     final parent = g.plantsById[p['parentPlantId']];
-    return {
+    final photos = await _store.photos(grant.gardenId, plantId: plant.id);
+    final cover = _coverOf(photos, p['coverPhotoId'] as String?);
+    final loader = _photos;
+    final coverImage = cover == null ||
+            loader == null ||
+            _optBool(args, 'includeCoverImage') == false
+        ? null
+        : await loader(grant.gardenId, cover.photoKey, _photoSizes['small']!);
+    return McpToolResult({
       ...g.summary(plant, _today()),
       'acquisitionDate': p['acquisitionDate'],
       'statusChangedAt': p['statusChangedAt'],
@@ -437,7 +490,77 @@ class _Tools {
             },
       ],
       'recentEntries': [for (final e in entries) g.entry(e)],
+      'photoCount': photos.length,
+      'coverPhoto': cover == null ? null : _photoView(cover),
+      'coverImageAttached': coverImage != null,
+    }, images: [if (coverImage != null) coverImage]);
+  }
+
+  Future<Map<String, Object?>> listPlantPhotos(
+      McpGrant grant, Map<String, Object?> args) async {
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final plant = g.resolvePlant(_reqString(args, 'plant'));
+    final photos = await _store.photos(grant.gardenId,
+        plantId: plant.id,
+        limit: _optInt(args, 'limit', min: 1, max: 500) ?? 50);
+    final all = await _store.photos(grant.gardenId, plantId: plant.id);
+    final cover = _coverOf(all, plant.payload['coverPhotoId'] as String?);
+    return {
+      'plant': {'id': plant.id, 'nickname': plant.payload['nickname']},
+      'total': all.length,
+      'photos': [
+        for (final photo in photos)
+          {..._photoView(photo), 'isCover': photo.id == cover?.id},
+      ],
     };
+  }
+
+  Future<McpToolResult> getPhotos(
+      McpGrant grant, Map<String, Object?> args) async {
+    final ids = _optStringList(args, 'photoIds') ?? const [];
+    if (ids.isEmpty) throw const McpToolError('photoIds is required');
+    if (ids.length > _maxPhotosPerCall) {
+      throw const McpToolError(
+          'at most $_maxPhotosPerCall photos per call');
+    }
+    final maxSide =
+        _photoSizes[_optEnum(args, 'size', _photoSizes.keys.toList()) ??
+            'medium']!;
+    final found = {
+      for (final ref in await _store.photos(grant.gardenId, photoIds: ids))
+        ref.id: ref,
+    };
+    final unique = ids.toSet().toList();
+    // Each photo is shrunk in its own isolate: load them side by side.
+    final loaded = await Future.wait([
+      for (final id in unique)
+        if (found[id] case final ref?)
+          _photos!(grant.gardenId, ref.photoKey, maxSide)
+        else
+          Future<McpImage?>.value(),
+    ]);
+    final images = <McpImage>[];
+    final returned = <Map<String, Object?>>[];
+    final missing = <String>[];
+    for (var i = 0; i < unique.length; i++) {
+      final id = unique[i];
+      final ref = found[id];
+      final image = loaded[i];
+      if (image == null) {
+        missing.add(id);
+      } else {
+        images.add(image);
+        returned.add(_photoView(ref!));
+      }
+    }
+    if (images.isEmpty) {
+      throw McpToolError('no photo found for: ${missing.join(', ')}');
+    }
+    return McpToolResult({
+      // Same order as the images that follow.
+      'photos': returned,
+      if (missing.isNotEmpty) 'notFound': missing,
+    }, images: images);
   }
 
   Future<Map<String, Object?>> listEntries(
@@ -1081,9 +1204,36 @@ class _Snapshot {
       'note': p['note'],
       'numericValue': p['numericValue'],
       'details': details,
+      'hasPhoto': p['photoKey'] != null,
     };
   }
 }
+
+/// The cover the app shows: the picked photo while it still exists, else
+/// the newest entry's own photo (`coverPhotoIdOf` in the app).
+PhotoRef? _coverOf(List<PhotoRef> photos, String? picked) {
+  for (final p in photos) {
+    if (p.id == picked) return p;
+  }
+  for (final p in photos) {
+    if (p.id == p.entryId) return p;
+  }
+  return null;
+}
+
+Map<String, Object?> _photoView(PhotoRef p) => {
+      'photoId': p.id,
+      'entryId': p.entryId,
+      'date': p.date,
+      'entryType': p.entryType,
+      'note': p.note,
+    };
+
+/// Adapts a tool that only returns JSON.
+Future<McpToolResult> Function(McpGrant, Map<String, Object?>) _json(
+        Future<Map<String, Object?>> Function(McpGrant, Map<String, Object?>)
+            run) =>
+    (grant, args) async => McpToolResult(await run(grant, args));
 
 Map<String, Object?> _speciesView(StoredEntity s) => {
       'id': s.id,
