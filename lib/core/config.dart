@@ -93,6 +93,8 @@ class Config {
       dailyRetentionDays:
           intVar('WEATHER_DAILY_RETENTION_DAYS', 365, 7, 3650),
       regionIdleDays: intVar('WEATHER_REGION_IDLE_DAYS', 30, 1, 3650),
+      snapshotRetentionDays:
+          intVar('WEATHER_SNAPSHOT_RETENTION_DAYS', 30, 2, 3650),
     );
   }
 

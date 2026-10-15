@@ -217,6 +217,7 @@ Desligada por padrão. Quando um admin liga (`PATCH /admin/settings` com `{"weat
   - **horária:** dos últimos `WEATHER_HOURLY_PAST_DAYS` dias (padrão 2) até o fim da previsão (`WEATHER_FORECAST_DAYS`, padrão 7).
   - **diária:** cerca de `WEATHER_DAILY_RETENTION_DAYS` dias (padrão 365). Os dados são apagados de mês em mês, nunca no meio de um mês.
   - **mensal:** resumo de cada mês completo (médias e extremos de temperatura, chuva total, dias com chuva ≥ 1 mm e ET0 total), mantido enquanto a região existir.
+  - **snapshots:** a previsão diária exatamente como cada busca a emitiu (de hoje em diante), por `WEATHER_SNAPSHOT_RETENTION_DAYS` dias (padrão 30). A tabela diária só guarda o valor mais recente de cada data; os snapshots guardam os anteriores, usados pela rega ajustada ao clima.
   - Uma região da qual nenhum local se aproxima há `WEATHER_REGION_IDLE_DAYS` dias (padrão 30) é apagada junto com seus dados.
 - Cada busca sobrescreve as horas e os dias que já estavam guardados (sempre inclui pelo menos 2 dias passados). Assim, os dias recentes trazem o dado mais próximo do que realmente aconteceu.
 - Horas e datas estão no fuso local da região (`timezone`), no mesmo formato em que o provedor as envia.
@@ -243,6 +244,31 @@ Autenticada, com escopo de jardim (`X-Polypodium-Garden`, igual ao sync). Devolv
 - Como uma região pode ser compartilhada com locais de outras contas, a resposta nunca inclui as coordenadas dela.
 
 Os erros vêm como `404` com um campo `code`: `weather_disabled`, `location_not_found` (inclui local excluído ou de outro jardim), `no_coordinates` ou `weather_pending` (ainda não houve busca para a região; tente depois).
+
+### `GET /weather/watering`
+
+Autenticada, com escopo de jardim. Diz quanto o clima adia ou adianta a próxima rega de cada planta que ele afeta: ativa, com frequência de rega, já regada alguma vez e num local com coordenadas cuja região já tem previsão.
+
+```json
+{
+  "generatedAt": "2026-10-15T14:00:00.000Z",
+  "plants": [{
+    "plantId": "…", "locationId": "…",
+    "lastWateredAt": "2026-10-12T08:30:00.000", "frequencyDays": 4,
+    "exposedToRain": true,
+    "dueDate": "2026-10-16", "adjustedDueDate": "2026-10-18",
+    "shiftDays": 2, "reason": "rain", "rainMm": 12.4,
+    "forecastFetchedAt": "2026-10-15T09:00:02.000Z"
+  }]
+}
+```
+
+O cálculo é um balanço hídrico simples. A frequência da planta é quanto dura uma rega num dia típico, o dia cuja ET0 é a média da região nos últimos 30 dias. A cada dia depois da rega a planta gasta `et0 / média` de um dia típico (entre 0,5 e 2). Se o local tem `exposedToRain: true`, a chuva devolve parte disso: 70% dos milímetros, convertidos em dias típicos, e nunca mais do que a planta gastou desde a última rega (chuva logo depois da rega vale pouco). Dias com menos de 2 mm não contam. A planta vence no dia em que o gasto soma a frequência, arredondado para o dia mais próximo.
+
+- Dias passados usam o observado. De hoje em diante vale o snapshot mais recente, com a chuva prevista multiplicada pela probabilidade e limitada ao que o snapshot de um dia anterior previa para a mesma data. Uma chuva que só a previsão mais nova mostra ainda não adia nada.
+- `shiftDays > 0` adia (`reason`: `rain` ou `cool`, dias amenos) e `shiftDays < 0` adianta (`heat`). Adia no máximo 7 dias e nunca mais que a própria frequência. Adianta no máximo 2 dias e nunca mais que metade da frequência. Adiantar nunca deixa a rega atrasada: `adjustedDueDate` não fica antes de hoje, a menos que `dueDate` já esteja.
+- `lastWateredAt` e `frequencyDays` são os valores usados. O app só aplica o ajuste enquanto os dele forem iguais, porque uma rega nova ou outra frequência invalidam o cálculo.
+- `404` com `code: weather_disabled` quando a previsão está desligada.
 
 ## MCP
 
@@ -302,6 +328,7 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 | `list_entries` | Registros do diário, mais recentes primeiro; por planta, tipo e intervalo de dias (`hasPhoto` diz se o registro tem foto) |
 | `list_species`, `list_locations`, `list_pots`, `list_soils`, `list_defensivos` | Catálogos |
 | `get_weather` | Previsão de um local (quando o admin ligou a previsão do tempo) |
+| `watering_advice` | Quanto o clima adia ou adianta a rega de cada planta, como em `GET /weather/watering` (`onlyChanged` filtra as que mudaram) |
 | `add_entry` ✎ | Registra rega, adubação, observação etc. em uma ou mais plantas, ou em todas as plantas ativas de um vaso, com até 5 fotos (`photos`) |
 | `add_entry_photos` ✎ | Anexa fotos a um registro existente, depois das que ele já tem (máximo de 5 por registro, como no app) |
 | `delete_entry` ✎ | Exclui um registro (e as fotos dele) |
@@ -310,7 +337,8 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 | `repot_plant` ✎ | Replantio de uma ou mais plantas, como no app: um registro `repotting` por planta (diâmetro, material, solo novo, vaso de origem e de destino) e a planta muda de vaso (levando a localização do vaso, se ele tiver) e/ou de solo. `pot: ""` tira a planta do vaso. Aceita fotos |
 | `create_pot` ✎ | Cria vaso, jardineira ou canteiro (tipo, diâmetro, material, local, notas) |
 | `update_species` ✎ | Edita a ficha de uma espécie (nomes, rega padrão, luz, umidade, toxicidade, floração, notas, solos recomendados). Só os campos enviados mudam: `""` limpa um campo e `[]` limpa uma lista |
-| `create_species` ✎, `create_location` ✎ | Cria espécie/local |
+| `create_species` ✎, `create_location` ✎ | Cria espécie/local (`exposedToRain` marca um local onde a chuva molha as plantas) |
+| `update_location` ✎ | Altera só os campos informados de um local (nome, descrição, coordenadas, `exposedToRain`) |
 
 ✎ = só aparece para tokens com `canWrite: true`.
 

@@ -24,6 +24,7 @@ import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
+import 'package:polypodium_server/features/weather/watering_advisor.dart';
 import 'package:polypodium_server/features/weather/weather_handler.dart';
 import 'package:polypodium_server/features/weather/weather_provider.dart';
 import 'package:polypodium_server/features/weather/weather_repository.dart';
@@ -66,13 +67,16 @@ void main() async {
   if (Config.updateCheckEnabled) releases.start();
   final serverStartedAt = DateTime.now();
   final syncRepo = SyncRepository(pool);
-  final weatherHandler = WeatherHandler(weather, weatherRepo);
+  final gardenStore = GardenStore(pool);
+  final weatherHandler = WeatherHandler(weather, weatherRepo,
+      WateringAdvisor(weather, weatherRepo, gardenStore));
   final mcpTokenRepo = McpTokenRepository(pool);
   final mcpServer = McpServer(
     polypodiumTools(
-      store: GardenStore(pool),
+      store: gardenStore,
       sync: syncRepo,
       forecast: weatherHandler.forecast,
+      wateringAdvice: weatherHandler.wateringAdvice,
       photos: PhotoRenderer(Config.photosDir).call,
       intake: PhotoIntake(Config.photosDir, maxBytes: Config.maxPhotoBytes),
     ),

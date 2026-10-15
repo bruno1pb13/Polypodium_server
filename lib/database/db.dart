@@ -232,6 +232,23 @@ Future<void> _runMigrations(Session pool) async {
     )
   '''));
 
+  // The daily forecast exactly as each fetch issued it. weather_daily keeps
+  // only the latest value per date; snapshots keep earlier ones, so the
+  // watering advice can check that consecutive forecasts agree before
+  // trusting forecast rain. `issued_on` is the region's local date at the
+  // fetch.
+  await pool.execute(Sql('''
+    CREATE TABLE IF NOT EXISTS weather_snapshots (
+      id         BIGSERIAL PRIMARY KEY,
+      region_id  TEXT NOT NULL REFERENCES weather_regions(id) ON DELETE CASCADE,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      issued_on  DATE NOT NULL,
+      daily      JSONB NOT NULL
+    )
+  '''));
+  await pool.execute(Sql(
+      'CREATE INDEX IF NOT EXISTS idx_weather_snapshots_region ON weather_snapshots(region_id, fetched_at DESC)'));
+
   // Single sequence shared by every mat_* table so `rev` stays one
   // monotonic stream across entity types (mirrors the ordering guarantee
   // the old global sync_events.id sequence gave for free), which keeps

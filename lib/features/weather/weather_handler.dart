@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:shelf/shelf.dart';
 
+import 'watering_advisor.dart';
 import 'weather_models.dart';
 import 'weather_repository.dart';
 import 'weather_service.dart';
@@ -13,9 +14,10 @@ typedef ForecastResult = ({
 });
 
 class WeatherHandler {
-  const WeatherHandler(this._service, this._repo);
+  const WeatherHandler(this._service, this._repo, this._advisor);
   final WeatherService _service;
   final WeatherRepository _repo;
+  final WateringAdvisor _advisor;
 
   /// `GET /weather/locations/<id>?days=&months=` — the forecast for one of
   /// the garden's locations: hourly detail for the retained hours, daily
@@ -80,6 +82,33 @@ class WeatherHandler {
         'hourly': await _repo.hourly(region.id),
         'daily': await _repo.daily(region.id, clampedDays),
         'monthly': await _repo.monthly(region.id, clampedMonths),
+      },
+      error: null,
+    );
+  }
+
+  /// `GET /weather/watering` — how the weather moves each plant's next
+  /// watering (see [WateringAdvisor]).
+  Future<Response> watering(Request request) async {
+    final result = await wateringAdvice(request.context['gardenId'] as String);
+    final error = result.error;
+    if (error != null) return _error(404, error.code, error.message);
+    return _json(200, result.body!);
+  }
+
+  /// The body of [watering], or why there is none. Shared with the MCP
+  /// `watering_advice` tool.
+  Future<ForecastResult> wateringAdvice(String gardenId) async {
+    if (!await _service.isEnabled()) {
+      return (
+        body: null,
+        error: (code: 'weather_disabled', message: 'weather is disabled'),
+      );
+    }
+    return (
+      body: <String, Object?>{
+        'generatedAt': DateTime.now().toUtc().toIso8601String(),
+        'plants': await _advisor.forGarden(gardenId),
       },
       error: null,
     );
