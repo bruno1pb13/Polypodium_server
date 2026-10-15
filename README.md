@@ -10,6 +10,7 @@ Servidor de sincronização self-hosted para o app [Polypodium](https://github.c
 - **Multiusuário** — contas com login (JWT), a primeira conta vira admin e cria as demais.
 - **Last-write-wins** — conflitos entre aparelhos são resolvidos de forma determinística, sem intervenção.
 - **Tudo incluso** — dados, fotos e painel de administração pelo próprio app.
+- **Rega pelo clima** — com a previsão do tempo ligada, a rega é adiada quando chove nas plantas expostas e adiantada em dias quentes, com regras ajustáveis pelo admin.
 - **Acesso por IA (MCP)** — opcional e desligado por padrão: assistentes como Claude e Cursor consultam e editam um jardim, inclusive vendo as fotos das plantas.
 
 ## Começar rápido

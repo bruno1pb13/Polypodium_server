@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/config.dart';
 import '../../core/http_utils.dart';
 import '../auth/i_auth_repository.dart';
+import '../weather/watering_settings.dart';
 import '../weather/weather_service.dart';
 import 'i_settings_repository.dart';
 import 'release_checker.dart';
@@ -106,6 +107,26 @@ class AdminHandler {
       }
     }
     return getSettings(request);
+  }
+
+  /// `GET /admin/watering` — whether the weather adjusts watering
+  /// schedules, and the rules it uses (see [WateringSettings.toJson]).
+  Future<Response> getWatering(Request request) async =>
+      _json(200, (await WateringSettings.load(_settings)).toJson());
+
+  /// `PATCH /admin/watering` — changes any of them; a rule set to null goes
+  /// back to its default.
+  Future<Response> updateWatering(Request request) async {
+    final body = await readJsonMap(request, maxBytes: Config.maxJsonBodyBytes);
+    final current = await WateringSettings.load(_settings);
+    final WateringSettings next;
+    try {
+      next = current.patch(body);
+    } on WateringSettingsError catch (e) {
+      return _error(400, e.message);
+    }
+    await next.save(_settings);
+    return _json(200, next.toJson());
   }
 
   /// Regions the weather job maintains and how their last fetch went.

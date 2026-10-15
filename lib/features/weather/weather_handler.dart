@@ -2,7 +2,9 @@ import 'dart:convert';
 
 import 'package:shelf/shelf.dart';
 
+import '../admin/i_settings_repository.dart';
 import 'watering_advisor.dart';
+import 'watering_settings.dart';
 import 'weather_models.dart';
 import 'weather_repository.dart';
 import 'weather_service.dart';
@@ -14,10 +16,15 @@ typedef ForecastResult = ({
 });
 
 class WeatherHandler {
-  const WeatherHandler(this._service, this._repo, this._advisor);
+  const WeatherHandler(this._service, this._repo, this._advisor,
+      {ISettingsRepository? settings})
+      : _settings = settings;
   final WeatherService _service;
   final WeatherRepository _repo;
   final WateringAdvisor _advisor;
+
+  /// Where the admin's [WateringSettings] live; null uses the defaults.
+  final ISettingsRepository? _settings;
 
   /// `GET /weather/locations/<id>?days=&months=` — the forecast for one of
   /// the garden's locations: hourly detail for the retained hours, daily
@@ -105,10 +112,23 @@ class WeatherHandler {
         error: (code: 'weather_disabled', message: 'weather is disabled'),
       );
     }
+    final settingsRepo = _settings;
+    final settings = settingsRepo == null
+        ? const WateringSettings()
+        : await WateringSettings.load(settingsRepo);
+    if (!settings.enabled) {
+      return (
+        body: null,
+        error: (
+          code: 'watering_disabled',
+          message: 'weather-adjusted watering is disabled',
+        ),
+      );
+    }
     return (
       body: <String, Object?>{
         'generatedAt': DateTime.now().toUtc().toIso8601String(),
-        'plants': await _advisor.forGarden(gardenId),
+        'plants': await _advisor.forGarden(gardenId, rules: settings.rules),
       },
       error: null,
     );

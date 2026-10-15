@@ -18,15 +18,14 @@ const _baselineDays = 30;
 /// capped by what the previous day's snapshot said for the same date, so a
 /// rain that only the newest forecast shows doesn't postpone anything yet.
 class WateringAdvisor {
-  const WateringAdvisor(this._service, this._repo, this._store,
-      {this.rules = const WateringRules()});
+  const WateringAdvisor(this._service, this._repo, this._store);
 
   final WeatherService _service;
   final WeatherRepository _repo;
   final IGardenStore _store;
-  final WateringRules rules;
 
-  Future<List<Map<String, Object?>>> forGarden(String gardenId) async {
+  Future<List<Map<String, Object?>>> forGarden(String gardenId,
+      {WateringRules rules = const WateringRules()}) async {
     final plants = await _store.list(gardenId, 'plant');
     final species = {
       for (final s in await _store.list(gardenId, 'species')) s.id: s.payload

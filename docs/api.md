@@ -202,6 +202,7 @@ Além de `GET /admin/me` (dados da própria conta), as rotas abaixo exigem `role
 | `PATCH /admin/users/<id>/status` | Ativa/desativa conta |
 | `GET /admin/weather` | Regiões de previsão do tempo (com coordenadas), última busca e último erro |
 | `POST /admin/weather/refresh` | Busca a previsão de todas as regiões em uso agora (`409` se desligada) |
+| `GET /admin/watering` / `PATCH /admin/watering` | Liga/desliga a rega ajustada ao clima e ajusta as regras dela (veja [Regras da rega](#regras-da-rega-adminwatering)) |
 
 `GET /admin/settings` traz `allowMemberExport`, `allowMemberImport`, `weatherEnabled` e `mcpEnabled`; o `PATCH` aceita qualquer subconjunto deles. `GET /admin/me` traz `weatherEnabled` e `mcpEnabled` para qualquer conta.
 
@@ -263,12 +264,41 @@ Autenticada, com escopo de jardim. Diz quanto o clima adia ou adianta a próxima
 }
 ```
 
-O cálculo é um balanço hídrico simples. A frequência da planta é quanto dura uma rega num dia típico, o dia cuja ET0 é a média da região nos últimos 30 dias. A cada dia depois da rega a planta gasta `et0 / média` de um dia típico (entre 0,5 e 2). Se o local tem `exposedToRain: true`, a chuva devolve parte disso: 70% dos milímetros, convertidos em dias típicos, e nunca mais do que a planta gastou desde a última rega (chuva logo depois da rega vale pouco). Dias com menos de 2 mm não contam. A planta vence no dia em que o gasto soma a frequência, arredondado para o dia mais próximo.
+O cálculo é um balanço hídrico simples. A frequência da planta é quanto dura uma rega num dia típico, o dia cuja ET0 é a média da região nos últimos 30 dias. A cada dia depois da rega a planta gasta `et0 / média` de um dia típico (entre 0,5 e 2, por padrão). Se o local tem `exposedToRain: true`, a chuva devolve parte disso: 70% dos milímetros (padrão), convertidos em dias típicos, e nunca mais do que a planta gastou desde a última rega (chuva logo depois da rega vale pouco). Dias com menos de 2 mm (padrão) não contam. A planta vence no dia em que o gasto soma a frequência, arredondado para o dia mais próximo. Os valores marcados como padrão são ajustáveis pelo admin em [`/admin/watering`](#regras-da-rega-adminwatering).
 
 - Dias passados usam o observado. De hoje em diante vale o snapshot mais recente, com a chuva prevista multiplicada pela probabilidade e limitada ao que o snapshot de um dia anterior previa para a mesma data. Uma chuva que só a previsão mais nova mostra ainda não adia nada.
-- `shiftDays > 0` adia (`reason`: `rain` ou `cool`, dias amenos) e `shiftDays < 0` adianta (`heat`). Adia no máximo 7 dias e nunca mais que a própria frequência. Adianta no máximo 2 dias e nunca mais que metade da frequência. Adiantar nunca deixa a rega atrasada: `adjustedDueDate` não fica antes de hoje, a menos que `dueDate` já esteja.
+- `shiftDays > 0` adia (`reason`: `rain` ou `cool`, dias amenos) e `shiftDays < 0` adianta (`heat`). Adia no máximo 7 dias (padrão) e nunca mais que a própria frequência. Adianta no máximo 2 dias (padrão) e nunca mais que metade da frequência. Adiantar nunca deixa a rega atrasada: `adjustedDueDate` não fica antes de hoje, a menos que `dueDate` já esteja.
 - `lastWateredAt` e `frequencyDays` são os valores usados. O app só aplica o ajuste enquanto os dele forem iguais, porque uma rega nova ou outra frequência invalidam o cálculo.
-- `404` com `code: weather_disabled` quando a previsão está desligada.
+- `404` com `code: weather_disabled` quando a previsão está desligada, ou `code: watering_disabled` quando o admin desligou a rega ajustada ao clima. Nos dois casos o app volta às datas normais.
+
+### Regras da rega (`/admin/watering`)
+
+Só admin. Valem para o servidor inteiro. A rega ajustada ao clima vem ligada, mas só funciona com a previsão do tempo ligada.
+
+`GET /admin/watering`:
+
+```json
+{
+  "enabled": true,
+  "minRainMm": 2, "rainEfficiency": 0.7,
+  "maxPostponeDays": 7, "maxAdvanceDays": 2,
+  "minDemand": 0.5, "maxDemand": 2,
+  "defaults": { "minRainMm": 2, "rainEfficiency": 0.7, "maxPostponeDays": 7, "maxAdvanceDays": 2, "minDemand": 0.5, "maxDemand": 2 },
+  "limits": { "minRainMm": { "min": 0, "max": 50 }, "…": {} }
+}
+```
+
+| Campo | Faixa | Efeito |
+|---|---|---|
+| `enabled` | `true`/`false` | Desligado, `GET /weather/watering` responde `404 watering_disabled` e ninguém tem a rega deslocada |
+| `minRainMm` | 0–50 mm | Chuva diária abaixo disso é ignorada |
+| `rainEfficiency` | 0–1 | Parte da chuva que chega às raízes. `0` faz a chuva nunca adiar |
+| `maxPostponeDays` | 0–30 dias, inteiro | Quanto a rega pode ser adiada (também limitado à frequência da planta). `0` desliga o adiamento |
+| `maxAdvanceDays` | 0–30 dias, inteiro | Quanto a rega pode ser adiantada (também limitado à metade da frequência). `0` desliga o adiantamento por calor |
+| `minDemand` | 0,1–1 | Gasto mínimo de um dia ameno, em dias típicos. `1` faz dias amenos não adiarem nada |
+| `maxDemand` | 1–5 | Gasto máximo de um dia quente, em dias típicos. `1` faz o calor não adiantar nada |
+
+`PATCH /admin/watering` aceita qualquer subconjunto desses campos e devolve o mesmo formato do `GET`. Um campo com `null` volta ao padrão. Só os valores alterados ficam salvos (em `server_settings`), então os que não foram mexidos acompanham o padrão de versões futuras. Campo desconhecido, tipo errado ou valor fora da faixa: `400`.
 
 ## MCP
 

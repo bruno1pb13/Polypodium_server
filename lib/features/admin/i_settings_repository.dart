@@ -3,6 +3,10 @@
 abstract interface class ISettingsRepository {
   Future<bool> getBool(String key, {required bool defaultValue});
   Future<void> setBool(String key, bool value);
+
+  /// The raw stored value, or null when the key was never set.
+  Future<String?> getString(String key);
+  Future<void> setString(String key, String value);
 }
 
 /// Whether accounts with role == 'member' may export their data from the
@@ -21,3 +25,7 @@ const settingWeatherEnabled = 'weather_enabled';
 /// tokens. Off by default: when on, AI assistants holding a token read (and,
 /// with a write token, change) the token's garden.
 const settingMcpEnabled = 'mcp_enabled';
+
+/// How the weather adjusts watering schedules (`WateringSettings`, stored
+/// as JSON): whether it does at all, and the water-balance tunables.
+const settingWatering = 'watering';
