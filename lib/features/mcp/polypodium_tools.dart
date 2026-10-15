@@ -16,6 +16,10 @@ typedef ForecastLookup = Future<ForecastResult> Function(
     String gardenId, String locationId,
     {int days});
 
+/// Looks up how the weather moves each plant's watering (see
+/// [WeatherHandler.wateringAdvice]).
+typedef WateringAdviceLookup = Future<ForecastResult> Function(String gardenId);
+
 /// Entry types the app knows (`EntryType` in the app's enums.dart).
 const _entryTypes = [
   'irrigation',
@@ -101,11 +105,13 @@ List<McpTool> polypodiumTools({
   required IGardenStore store,
   required ISyncRepository sync,
   ForecastLookup? forecast,
+  WateringAdviceLookup? wateringAdvice,
   PhotoLoader? photos,
   IPhotoIntake? intake,
   DateTime Function() clock = DateTime.now,
 }) {
-  final tools = _Tools(store, sync, forecast, photos, intake, clock);
+  final tools =
+      _Tools(store, sync, forecast, wateringAdvice, photos, intake, clock);
   final photosParam = {
     if (intake != null)
       'photos': {
@@ -234,6 +240,24 @@ List<McpTool> polypodiumTools({
           'days': _integer('Past days of daily history (default 3).'),
         }, required: ['location']),
         run: _json(tools.weather),
+      ),
+    if (wateringAdvice != null)
+      McpTool(
+        name: 'watering_advice',
+        title: 'Weather-adjusted watering',
+        description: 'How the weather moves each plant\'s next watering: '
+            'rain on plants in locations exposed to rain postpones it, hot '
+            'dry days bring it forward, cool days push it back. Lists '
+            'plants with a watering interval, a past watering and a location '
+            'with coordinates; shiftDays > 0 = postponed, < 0 = brought '
+            'forward. The app applies the same advice to its schedule.',
+        inputSchema: _schema({
+          'onlyChanged': {
+            'type': 'boolean',
+            'description': 'Only plants whose date moved (default false).',
+          },
+        }),
+        run: _json(tools.wateringAdvice),
       ),
     if (photos != null) ...[
       McpTool(
@@ -480,6 +504,11 @@ List<McpTool> polypodiumTools({
         'description': _string('Free text.'),
         'latitude': {'type': 'number'},
         'longitude': {'type': 'number'},
+        'exposedToRain': {
+          'type': 'boolean',
+          'description': 'Plants here get rain (outdoors, uncovered), so '
+              'rain postpones their watering. Default false.',
+        },
       }, required: ['name']),
       writes: true,
       run: _json(tools.createLocation),
@@ -504,11 +533,12 @@ List<McpTool> polypodiumTools({
 }
 
 class _Tools {
-  _Tools(this._store, this._sync, this._forecast, this._photos, this._intake,
-      this._clock);
+  _Tools(this._store, this._sync, this._forecast, this._wateringAdvice,
+      this._photos, this._intake, this._clock);
   final IGardenStore _store;
   final ISyncRepository _sync;
   final ForecastLookup? _forecast;
+  final WateringAdviceLookup? _wateringAdvice;
   final PhotoLoader? _photos;
   final IPhotoIntake? _intake;
   final DateTime Function() _clock;
@@ -753,6 +783,7 @@ class _Tools {
           'description': l.payload['description'],
           'latitude': l.payload['latitude'],
           'longitude': l.payload['longitude'],
+          'exposedToRain': l.payload['exposedToRain'] == true,
           'activePlants': g.plants
               .where((p) =>
                   p.payload['locationId'] == l.id && _status(p) == 'active')
@@ -832,6 +863,31 @@ class _Tools {
     final error = result.error;
     if (error != null) throw McpToolError(error.message);
     return {'location': location.payload['name'], ...result.body!};
+  }
+
+  Future<Map<String, Object?>> wateringAdvice(
+      McpGrant grant, Map<String, Object?> args) async {
+    final result = await _wateringAdvice!(grant.gardenId);
+    final error = result.error;
+    if (error != null) throw McpToolError(error.message);
+    final g = await _Snapshot.load(_store, grant.gardenId);
+    final onlyChanged = args['onlyChanged'] == true;
+    return {
+      'generatedAt': result.body!['generatedAt'],
+      'plants': [
+        for (final a in result.body!['plants'] as List<Map<String, Object?>>)
+          if (!onlyChanged || a['shiftDays'] != 0)
+            {
+              'plant': {
+                'id': a['plantId'],
+                'nickname': g.plantsById[a['plantId']]?.payload['nickname'],
+              },
+              'location': g.locationRef(a['locationId']),
+              for (final MapEntry(:key, :value) in a.entries)
+                if (key != 'plantId' && key != 'locationId') key: value,
+            },
+      ],
+    };
   }
 
   // -- writes ----------------------------------------------------------------
@@ -1409,6 +1465,7 @@ class _Tools {
       'description': _optString(args, 'description'),
       'latitude': (lat as num?)?.toDouble(),
       'longitude': (lon as num?)?.toDouble(),
+      'exposedToRain': args['exposedToRain'] == true,
       'createdAt': now.toIso8601String(),
     };
     await _sync.receiveChanges(grant.gardenId, grant.userId, grant.deviceId,

@@ -70,6 +70,18 @@ class DailyWeather {
   /// Reference evapotranspiration (FAO-56), in mm.
   final double? et0;
 
+  factory DailyWeather.fromJson(Map<String, dynamic> json) => DailyWeather(
+        date: json['date'] as String,
+        weatherCode: (json['weatherCode'] as num?)?.toInt(),
+        temperatureMax: (json['temperatureMax'] as num?)?.toDouble(),
+        temperatureMin: (json['temperatureMin'] as num?)?.toDouble(),
+        precipitationSum: (json['precipitationSum'] as num?)?.toDouble(),
+        precipitationProbabilityMax:
+            (json['precipitationProbabilityMax'] as num?)?.toDouble(),
+        windSpeedMax: (json['windSpeedMax'] as num?)?.toDouble(),
+        et0: (json['et0'] as num?)?.toDouble(),
+      );
+
   Map<String, Object?> toJson() => {
         'date': date,
         'weatherCode': weatherCode,
@@ -80,6 +92,20 @@ class DailyWeather {
         'windSpeedMax': windSpeedMax,
         'et0': et0,
       };
+}
+
+/// The daily forecast one fetch issued, from its `issuedOn` date (the
+/// region's local date then) onwards.
+class WeatherSnapshot {
+  const WeatherSnapshot({
+    required this.fetchedAt,
+    required this.issuedOn,
+    required this.daily,
+  });
+
+  final DateTime fetchedAt;
+  final String issuedOn;
+  final List<DailyWeather> daily;
 }
 
 /// A point the server fetches weather for. Nearby location coordinates share
@@ -119,6 +145,7 @@ class WeatherOptions {
     this.hourlyPastDays = 2,
     this.dailyRetentionDays = 365,
     this.regionIdleDays = 30,
+    this.snapshotRetentionDays = 30,
   });
 
   /// Coordinates closer than this to a region's center reuse that region.
@@ -142,6 +169,10 @@ class WeatherOptions {
   /// A region no location has been near for this long is deleted with all
   /// of its data.
   final int regionIdleDays;
+
+  /// How long each fetch's forecast, as issued, is kept in
+  /// `weather_snapshots`.
+  final int snapshotRetentionDays;
 }
 
 /// Great-circle distance between two coordinates, in km.

@@ -29,6 +29,7 @@ import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
+import 'package:polypodium_server/features/weather/watering_advisor.dart';
 import 'package:polypodium_server/features/weather/weather_handler.dart';
 import 'package:polypodium_server/features/weather/weather_models.dart';
 import 'package:polypodium_server/features/weather/weather_provider.dart';
@@ -141,7 +142,8 @@ void main() {
       admin: AdminHandler(authRepo, settings, DateTime.now(), 'test',
           weather: service),
       gardens: GardenHandler(gardenRepo, authRepo),
-      weather: WeatherHandler(service, repo),
+      weather: WeatherHandler(
+          service, repo, WateringAdvisor(service, repo, GardenStore(db))),
       mcp: McpHandler(McpServer(
           polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
           version: 'test')),
@@ -217,20 +219,16 @@ void main() {
         login.body['deviceId'] as String);
   }
 
-  Future<void> pushLocation(_Account by, String id,
-      {double? lat, double? lon, bool deleted = false}) async {
+  Future<void> push(_Account by, String entityType, String id,
+      Map<String, Object?> payload,
+      {bool deleted = false}) async {
     final res = await send('POST', '/sync/receive', as: by, body: {
       'deviceId': by.deviceId,
       'changes': [
         {
-          'entityType': 'location',
+          'entityType': entityType,
           'entityId': id,
-          'payload': {
-            'id': id,
-            'name': id,
-            'latitude': lat,
-            'longitude': lon,
-          },
+          'payload': {'id': id, ...payload},
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
           'deletedAt':
               deleted ? DateTime.now().toUtc().toIso8601String() : null,
@@ -241,6 +239,16 @@ void main() {
     });
     expect(res.status, 200, reason: '${res.body}');
   }
+
+  Future<void> pushLocation(_Account by, String id,
+          {double? lat, double? lon, bool deleted = false,
+          bool exposed = false}) =>
+      push(by, 'location', id, {
+        'name': id,
+        'latitude': lat,
+        'longitude': lon,
+        'exposedToRain': exposed,
+      }, deleted: deleted);
 
   Future<List<WeatherRegion>> testRegions() async => [
         for (final r in await repo.listRegions())
@@ -265,13 +273,16 @@ void main() {
     await settings.setBool(settingWeatherEnabled, true);
     await resetTestRegions();
     // Earlier tests' locations would otherwise keep their regions in use.
-    await pool!.execute(
-      Sql.named('DELETE FROM mat_locations WHERE garden_id = ANY(@ids::text[])'),
-      parameters: {'ids': createdUsers},
-    );
+    for (final table in ['mat_locations', 'mat_plants', 'mat_species']) {
+      await pool!.execute(
+        Sql.named('DELETE FROM $table WHERE garden_id = ANY(@ids::text[])'),
+        parameters: {'ids': createdUsers},
+      );
+    }
     owner = await account();
     // A and B are ~1 km apart and share a region; C is ~55 km away.
-    await pushLocation(owner, '$loc-a', lat: _baseLat, lon: _baseLon);
+    await pushLocation(owner, '$loc-a',
+        lat: _baseLat, lon: _baseLon, exposed: true);
     await pushLocation(owner, '$loc-b',
         lat: _baseLat - 0.005, lon: _baseLon - 0.01);
     await pushLocation(owner, '$loc-c', lat: _baseLat - 0.5, lon: _baseLon);
@@ -492,5 +503,147 @@ void main() {
 
     res = await send('GET', '/admin/weather', as: owner);
     expect(res.status, 403);
+  });
+
+  test('each fetch keeps a snapshot of the forecast it issued', () async {
+    if (pool == null) return markTestSkipped('no Postgres');
+
+    await service.runOnce(force: true);
+    await service.runOnce(force: true);
+    final region = (await service.regionFor(_baseLat, _baseLon))!;
+    final snapshots = await repo.snapshots(region.id);
+    expect(snapshots, hasLength(2));
+    final today = _day(DateTime.now().toUtc());
+    expect(snapshots.first.issuedOn, today);
+    // Only the days from the fetch on, not the past days it also returned.
+    expect(snapshots.first.daily.first.date, today);
+    expect(snapshots.first.daily, hasLength(service.options.forecastDays));
+
+    await pool!.execute(
+      Sql.named('''
+        UPDATE weather_snapshots SET fetched_at = NOW() - INTERVAL '40 days'
+        WHERE region_id = @id
+      '''),
+      parameters: {'id': region.id},
+    );
+    await repo.housekeeping(service.options);
+    expect(await repo.snapshots(region.id), isEmpty);
+  });
+
+  group('watering advice', () {
+    final species = 'species-$stamp';
+    final wateredTwoDaysAgo = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(days: 2))
+        .toIso8601String()
+        .substring(0, 19);
+
+    Future<void> pushPlant(String id, String locationId) =>
+        push(owner, 'plant', id, {
+          'nickname': id,
+          'speciesId': species,
+          'soilId': 'pottingMix',
+          'locationId': locationId,
+          'irrigationFrequencyDays': 4,
+          'lastIrrigatedAt': wateredTwoDaysAgo,
+          'acquisitionDate': wateredTwoDaysAgo,
+          'createdAt': wateredTwoDaysAgo,
+        });
+
+    Future<Map<String, Map<String, dynamic>>> advice() async {
+      final res = await send('GET', '/weather/watering', as: owner);
+      expect(res.status, 200, reason: '${res.body}');
+      return {
+        for (final a in (res.body['plants'] as List).cast<Map<String, dynamic>>())
+          a['plantId'] as String: a
+      };
+    }
+
+    test('forecast rain postpones only plants exposed to it', () async {
+      if (pool == null) return markTestSkipped('no Postgres');
+
+      await push(owner, 'species', species,
+          {'popularName': 'Fern', 'defaultIrrigationFrequencyDays': 7});
+      await pushPlant('$loc-plant-out', '$loc-a');
+      await pushPlant('$loc-plant-in', '$loc-b');
+      await pushPlant('$loc-plant-nowhere', '$loc-none');
+
+      expect(await advice(), isEmpty, reason: 'nothing fetched yet');
+
+      await service.runOnce();
+      final byPlant = await advice();
+      expect(byPlant.keys,
+          unorderedEquals(['$loc-plant-out', '$loc-plant-in']));
+
+      // 3 mm every day, past and forecast, and no ET0 history.
+      final out = byPlant['$loc-plant-out']!;
+      expect(out['exposedToRain'], isTrue);
+      expect(out['frequencyDays'], 4);
+      expect(out['lastWateredAt'], wateredTwoDaysAgo);
+      expect(out['shiftDays'], 4);
+      expect(out['reason'], 'rain');
+      expect(out['adjustedDueDate'],
+          _day(DateTime.now().toUtc().add(const Duration(days: 6))));
+
+      final inside = byPlant['$loc-plant-in']!;
+      expect(inside['shiftDays'], 0);
+      expect(inside['reason'], 'none');
+      expect(inside['dueDate'],
+          _day(DateTime.now().toUtc().add(const Duration(days: 2))));
+    });
+
+    test('forecast rain counts only as far as the previous day agreed',
+        () async {
+      if (pool == null) return markTestSkipped('no Postgres');
+
+      await push(owner, 'species', species,
+          {'popularName': 'Fern', 'defaultIrrigationFrequencyDays': 7});
+      await pushPlant('$loc-plant-out', '$loc-a');
+      await service.runOnce();
+      final region = (await service.regionFor(_baseLat, _baseLon))!;
+      // Yesterday's fetch forecast a dry week.
+      await pool!.execute(
+        Sql.named('''
+          INSERT INTO weather_snapshots (region_id, fetched_at, issued_on,
+            daily)
+          SELECT @id, NOW() - INTERVAL '1 day', CURRENT_DATE - 1,
+                 jsonb_agg(jsonb_build_object(
+                   'date', to_char(d, 'YYYY-MM-DD'), 'precipitationSum', 0))
+          FROM generate_series(CURRENT_DATE - 1, CURRENT_DATE + 6,
+                               INTERVAL '1 day') d
+        '''),
+        parameters: {'id': region.id},
+      );
+
+      final out = (await advice())['$loc-plant-out']!;
+      // Only the two observed rainy days since the watering count now.
+      expect(out['shiftDays'], 1);
+      expect(out['reason'], 'rain');
+    });
+
+    test('MCP lists the advice with plant and location names', () async {
+      if (pool == null) return markTestSkipped('no Postgres');
+
+      await push(owner, 'species', species,
+          {'popularName': 'Fern', 'defaultIrrigationFrequencyDays': 7});
+      await pushPlant('$loc-plant-out', '$loc-a');
+      await service.runOnce();
+
+      final handler = WeatherHandler(
+          service, repo, WateringAdvisor(service, repo, GardenStore(pool!)));
+      final result = await handler.wateringAdvice(owner.id);
+      expect(result.error, isNull);
+      final plants = result.body!['plants'] as List;
+      expect(plants.single['plantId'], '$loc-plant-out');
+    });
+
+    test('disabled weather gives no advice', () async {
+      if (pool == null) return markTestSkipped('no Postgres');
+
+      await settings.setBool(settingWeatherEnabled, false);
+      final res = await send('GET', '/weather/watering', as: owner);
+      expect(res.status, 404);
+      expect(res.body['code'], 'weather_disabled');
+    });
   });
 }

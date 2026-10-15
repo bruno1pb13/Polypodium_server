@@ -849,6 +849,78 @@ void main() {
       expect(good.statusCode, 200);
     });
   });
+
+  group('watering advice', () {
+    test('create_location stores exposedToRain; list_locations shows it',
+        () async {
+      final created = ok(await call('create_location', {
+        'name': 'Quintal',
+        'latitude': -23.5,
+        'longitude': -46.6,
+        'exposedToRain': true,
+      }));
+      expect(store.rows['location']![created['id']]!.payload['exposedToRain'],
+          isTrue);
+      final locations = (ok(await call('list_locations', {}))['locations']
+              as List)
+          .cast<Map<String, Object?>>();
+      final byName = {for (final l in locations) l['name']: l};
+      expect(byName['Quintal']!['exposedToRain'], isTrue);
+      expect(byName['Sala']!['exposedToRain'], isFalse);
+    });
+
+    test('watering_advice names plants and locations, and filters', () async {
+      final advised = McpServer(
+        polypodiumTools(
+          store: store,
+          sync: _FakeSync(store),
+          wateringAdvice: (gardenId) async => (
+            body: <String, Object?>{
+              'generatedAt': '2026-10-12T18:00:00.000Z',
+              'plants': <Map<String, Object?>>[
+                {'plantId': _fern, 'locationId': 'loc1', 'shiftDays': 2,
+                  'reason': 'rain', 'rainMm': 12.0},
+                {'plantId': _cactus, 'locationId': 'loc2', 'shiftDays': 0,
+                  'reason': 'none', 'rainMm': 0.0},
+              ],
+            },
+            error: null,
+          ),
+        ),
+        version: 'test',
+      );
+      Future<Map<String, Object?>> advice(Map<String, Object?> args) async {
+        final res = await advised.handle({
+          'jsonrpc': '2.0',
+          'id': 1,
+          'method': 'tools/call',
+          'params': {'name': 'watering_advice', 'arguments': args},
+        }, _writeGrant);
+        return ok(res!['result'] as Map<String, Object?>);
+      }
+
+      final all = (await advice({}))['plants'] as List;
+      expect(all, hasLength(2));
+      expect(all.first, {
+        'plant': {'id': _fern, 'nickname': 'Fern'},
+        'location': {'id': 'loc1', 'name': 'Varanda'},
+        'shiftDays': 2,
+        'reason': 'rain',
+        'rainMm': 12.0,
+      });
+      final changed = (await advice({'onlyChanged': true}))['plants'] as List;
+      expect(changed.single['plant'], {'id': _fern, 'nickname': 'Fern'});
+    });
+
+    test('watering_advice is only listed when the server has weather',
+        () async {
+      final res = await rpc('tools/list');
+      final names = [
+        for (final t in (res['result'] as Map)['tools'] as List) t['name']
+      ];
+      expect(names, isNot(contains('watering_advice')));
+    });
+  });
 }
 
 class _Tokens implements IMcpTokenRepository {

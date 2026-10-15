@@ -29,6 +29,7 @@ import 'package:polypodium_server/features/mcp/polypodium_tools.dart';
 import 'package:polypodium_server/features/photos/photo_handler.dart';
 import 'package:polypodium_server/features/sync/sync_handler.dart';
 import 'package:polypodium_server/features/sync/sync_repository.dart';
+import 'package:polypodium_server/features/weather/watering_advisor.dart';
 import 'package:polypodium_server/features/weather/weather_handler.dart';
 import 'package:polypodium_server/features/weather/weather_provider.dart';
 import 'package:polypodium_server/features/weather/weather_repository.dart';
@@ -72,10 +73,12 @@ void main() {
       admin: AdminHandler(
           authRepo, SettingsRepository(db), DateTime.now(), 'test'),
       gardens: GardenHandler(gardenRepo, authRepo),
-      weather: WeatherHandler(
-          WeatherService(WeatherRepository(db), SettingsRepository(db),
-              OpenMeteoProvider('http://localhost:9')),
-          WeatherRepository(db)),
+      weather: () {
+        final service = WeatherService(WeatherRepository(db),
+            SettingsRepository(db), OpenMeteoProvider('http://localhost:9'));
+        return WeatherHandler(service, WeatherRepository(db),
+            WateringAdvisor(service, WeatherRepository(db), GardenStore(db)));
+      }(),
       mcp: McpHandler(McpServer(
           polypodiumTools(
           store: GardenStore(db),

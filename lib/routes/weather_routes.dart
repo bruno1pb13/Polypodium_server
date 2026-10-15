@@ -11,7 +11,9 @@ import '../middleware/garden_middleware.dart';
 Handler buildWeatherHandler(
     WeatherHandler weather, ITokenService tokens, IAuthRepository authRepo,
     IGardenRepository gardens) {
-  final router = Router()..get('/locations/<id>', weather.forLocation);
+  final router = Router()
+    ..get('/locations/<id>', weather.forLocation)
+    ..get('/watering', weather.watering);
 
   return Pipeline()
       .addMiddleware(authMiddleware(tokens, authRepo))

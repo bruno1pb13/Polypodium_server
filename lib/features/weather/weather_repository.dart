@@ -188,6 +188,25 @@ class WeatherRepository {
             'elevation': forecast.elevation,
           },
         );
+        // After the timezone update, so `issued_on` is the region's today.
+        // Only the days from then on: the past ones are observations.
+        await tx.execute(
+          Sql.named('''
+            INSERT INTO weather_snapshots (region_id, issued_on, daily)
+            SELECT r.id, t.today, COALESCE(
+                     (SELECT jsonb_agg(d ORDER BY d->>'date')
+                      FROM jsonb_array_elements(@rows::jsonb) d
+                      WHERE (d->>'date')::date >= t.today),
+                     '[]'::jsonb)
+            FROM weather_regions r,
+                 LATERAL (SELECT $_regionToday AS today) t
+            WHERE r.id = @regionId
+          '''),
+          parameters: {
+            'regionId': regionId,
+            'rows': jsonEncode([for (final d in forecast.daily) d.toJson()]),
+          },
+        );
       });
 
   Future<void> recordFailure(String regionId, String error) => _db.execute(
@@ -212,6 +231,14 @@ class WeatherRepository {
             WHERE last_used_at < NOW() - make_interval(days => @idleDays)
           '''),
           parameters: {'idleDays': options.regionIdleDays},
+        );
+
+        await tx.execute(
+          Sql.named('''
+            DELETE FROM weather_snapshots
+            WHERE fetched_at < NOW() - make_interval(days => @days)
+          '''),
+          parameters: {'days': options.snapshotRetentionDays},
         );
 
         await tx.execute(
@@ -352,4 +379,103 @@ class WeatherRepository {
         }
     ];
   }
+
+  /// The region's today and its current offset from UTC, both from its
+  /// timezone (UTC until the first fetch names one).
+  Future<({DateTime today, Duration utcOffset})> regionClock(
+      String regionId) async {
+    final result = await _db.execute(
+      Sql.named('''
+        SELECT to_char($_regionToday, 'YYYY-MM-DD'),
+               EXTRACT(EPOCH FROM
+                 (NOW() AT TIME ZONE COALESCE(r.timezone, 'UTC'))
+                 - (NOW() AT TIME ZONE 'UTC'))::int
+        FROM weather_regions r WHERE r.id = @regionId
+      '''),
+      parameters: {'regionId': regionId},
+    );
+    if (result.isEmpty) {
+      final now = DateTime.now().toUtc();
+      return (
+        today: DateTime.utc(now.year, now.month, now.day),
+        utcOffset: Duration.zero,
+      );
+    }
+    return (
+      today: DateTime.parse('${result.first[0]}T00:00:00Z'),
+      utcOffset: Duration(seconds: result.first[1] as int),
+    );
+  }
+
+  /// Daily rows with `from <= date < until` (`YYYY-MM-DD`): observations
+  /// for past days, the latest forecast for the rest.
+  Future<List<DailyWeather>> dailyBetween(
+      String regionId, String from, String until) async {
+    final result = await _db.execute(
+      Sql.named('''
+        SELECT to_char(date, 'YYYY-MM-DD'), precipitation_sum,
+               precipitation_probability_max, et0
+        FROM weather_daily
+        WHERE region_id = @regionId
+          AND date >= @from::date AND date < @until::date
+        ORDER BY date
+      '''),
+      parameters: {'regionId': regionId, 'from': from, 'until': until},
+    );
+    return [
+      for (final row in result)
+        DailyWeather(
+          date: row[0] as String,
+          precipitationSum: row[1] as double?,
+          precipitationProbabilityMax: row[2] as double?,
+          et0: row[3] as double?,
+        )
+    ];
+  }
+
+  /// Average daily ET0 over the [days] days before `until` (`YYYY-MM-DD`),
+  /// or null without any value.
+  Future<double?> averageEt0(String regionId, String until, int days) async {
+    final result = await _db.execute(
+      Sql.named('''
+        SELECT AVG(et0) FROM weather_daily
+        WHERE region_id = @regionId AND et0 IS NOT NULL
+          AND date < @until::date
+          AND date >= @until::date - make_interval(days => @days)
+      '''),
+      parameters: {'regionId': regionId, 'until': until, 'days': days},
+    );
+    return result.first[0] as double?;
+  }
+
+  /// The region's newest snapshots, newest first.
+  Future<List<WeatherSnapshot>> snapshots(String regionId,
+      {int limit = 5}) async {
+    final result = await _db.execute(
+      Sql.named('''
+        SELECT fetched_at, to_char(issued_on, 'YYYY-MM-DD'), daily
+        FROM weather_snapshots WHERE region_id = @regionId
+        ORDER BY fetched_at DESC, id DESC
+        LIMIT @limit
+      '''),
+      parameters: {'regionId': regionId, 'limit': limit},
+    );
+    return [
+      for (final row in result)
+        WeatherSnapshot(
+          fetchedAt: row[0] as DateTime,
+          issuedOn: row[1] as String,
+          daily: [
+            for (final d in _decodeList(row[2]))
+              DailyWeather.fromJson(d as Map<String, dynamic>)
+          ],
+        )
+    ];
+  }
 }
+
+List<dynamic> _decodeList(Object? raw) => switch (raw) {
+      final List<dynamic> list => list,
+      final String text => jsonDecode(text) as List<dynamic>,
+      _ => const [],
+    };
