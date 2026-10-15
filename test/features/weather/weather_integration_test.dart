@@ -109,6 +109,7 @@ void main() {
   final createdUsers = <String>[];
   final preexistingRegions = <String>{};
   bool? previousEnabled;
+  String? previousWatering;
   final stamp = DateTime.now().microsecondsSinceEpoch;
   var seq = 0;
 
@@ -128,6 +129,7 @@ void main() {
       parameters: {'key': settingWeatherEnabled},
     );
     if (setting.isNotEmpty) previousEnabled = setting.first[0] == 'true';
+    previousWatering = await SettingsRepository(db).getString(settingWatering);
 
     final authRepo = AuthRepository(db);
     final gardenRepo = GardenRepository(db);
@@ -143,7 +145,8 @@ void main() {
           weather: service),
       gardens: GardenHandler(gardenRepo, authRepo),
       weather: WeatherHandler(
-          service, repo, WateringAdvisor(service, repo, GardenStore(db))),
+          service, repo, WateringAdvisor(service, repo, GardenStore(db)),
+          settings: settings),
       mcp: McpHandler(McpServer(
           polypodiumTools(store: GardenStore(db), sync: SyncRepository(db)),
           version: 'test')),
@@ -172,6 +175,7 @@ void main() {
     } else {
       await settings.setBool(settingWeatherEnabled, previousEnabled!);
     }
+    await restoreWatering(db, settings, previousWatering);
     for (final id in createdUsers) {
       await db.execute(
         Sql.named('''
@@ -271,6 +275,7 @@ void main() {
     provider.fail = false;
     provider.calls.clear();
     await settings.setBool(settingWeatherEnabled, true);
+    await restoreWatering(pool!, settings, null);
     await resetTestRegions();
     // Earlier tests' locations would otherwise keep their regions in use.
     for (final table in ['mat_locations', 'mat_plants', 'mat_species']) {
@@ -637,6 +642,50 @@ void main() {
       expect(plants.single['plantId'], '$loc-plant-out');
     });
 
+    test('admins tune the rules, and the advice follows them', () async {
+      if (pool == null) return markTestSkipped('no Postgres');
+
+      final admin = await account(role: 'admin');
+      expect((await send('GET', '/admin/watering', as: owner)).status, 403);
+
+      final initial = await send('GET', '/admin/watering', as: admin);
+      expect(initial.status, 200);
+      expect(initial.body['enabled'], isTrue);
+      expect(initial.body['maxPostponeDays'], 7);
+      expect(initial.body['defaults']['maxPostponeDays'], 7);
+      expect(initial.body['limits']['rainEfficiency'], {'min': 0, 'max': 1});
+
+      final bad = await send('PATCH', '/admin/watering',
+          as: admin, body: {'maxPostponeDays': 2.5});
+      expect(bad.status, 400);
+
+      final patched = await send('PATCH', '/admin/watering',
+          as: admin, body: {'maxPostponeDays': 2, 'rainEfficiency': 0.5});
+      expect(patched.status, 200, reason: '${patched.body}');
+      expect(patched.body['maxPostponeDays'], 2);
+      expect(patched.body['rainEfficiency'], 0.5);
+      expect(patched.body['minRainMm'], 2, reason: 'untouched');
+
+      await push(owner, 'species', species,
+          {'popularName': 'Fern', 'defaultIrrigationFrequencyDays': 7});
+      await pushPlant('$loc-plant-out', '$loc-a');
+      await service.runOnce();
+      // Rain every day would postpone 4 days; the admin capped it at 2.
+      expect((await advice())['$loc-plant-out']!['shiftDays'], 2);
+
+      final reset = await send('PATCH', '/admin/watering',
+          as: admin, body: {'maxPostponeDays': null});
+      expect(reset.body['maxPostponeDays'], 7);
+      expect(reset.body['rainEfficiency'], 0.5);
+
+      final off = await send('PATCH', '/admin/watering',
+          as: admin, body: {'enabled': false});
+      expect(off.body['enabled'], isFalse);
+      final res = await send('GET', '/weather/watering', as: owner);
+      expect(res.status, 404);
+      expect(res.body['code'], 'watering_disabled');
+    });
+
     test('disabled weather gives no advice', () async {
       if (pool == null) return markTestSkipped('no Postgres');
 
@@ -646,4 +695,17 @@ void main() {
       expect(res.body['code'], 'weather_disabled');
     });
   });
+}
+
+/// Puts the watering setting back to [value] (null: never set).
+Future<void> restoreWatering(
+    Pool db, SettingsRepository settings, String? value) async {
+  if (value == null) {
+    await db.execute(
+      Sql.named('DELETE FROM server_settings WHERE key = @key'),
+      parameters: {'key': settingWatering},
+    );
+  } else {
+    await settings.setString(settingWatering, value);
+  }
 }

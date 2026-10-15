@@ -143,6 +143,8 @@ Dois recursos vêm desligados e o admin liga na tela de administração do app (
 - **Previsão do tempo** (`weatherEnabled`): envia as coordenadas dos locais (agrupadas por região) ao Open-Meteo.
 - **Acesso por IA / MCP** (`mcpEnabled`): libera o endpoint `/api/v1/mcp`, para que assistentes de IA como Claude ou Cursor consultem e editem um jardim com um token criado pelo membro. Veja [API → MCP](api.md#mcp).
 
+Com a previsão ligada, o servidor também adia a rega das plantas quando chove (só em locais marcados como *expostos à chuva*) e a adianta em dias quentes. Isso vem ligado. O admin pode desligar ou mudar as regras (chuva mínima, quanto da chuva conta, quantos dias pode adiar ou adiantar) no card *Rega pelo clima* da administração do servidor, ou por `/api/v1/admin/watering`. Veja [API → Regras da rega](api.md#regras-da-rega-adminwatering).
+
 ## 5. Backups
 
 Os dados vivem em dois lugares: o banco PostgreSQL e o volume de fotos.

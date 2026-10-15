@@ -69,7 +69,8 @@ void main() async {
   final syncRepo = SyncRepository(pool);
   final gardenStore = GardenStore(pool);
   final weatherHandler = WeatherHandler(weather, weatherRepo,
-      WateringAdvisor(weather, weatherRepo, gardenStore));
+      WateringAdvisor(weather, weatherRepo, gardenStore),
+      settings: settingsRepo);
   final mcpTokenRepo = McpTokenRepository(pool);
   final mcpServer = McpServer(
     polypodiumTools(
