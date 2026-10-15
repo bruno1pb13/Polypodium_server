@@ -338,6 +338,7 @@ claude mcp add --transport http polypodium https://seu-servidor/api/v1/mcp \
 | `create_pot` ✎ | Cria vaso, jardineira ou canteiro (tipo, diâmetro, material, local, notas) |
 | `update_species` ✎ | Edita a ficha de uma espécie (nomes, rega padrão, luz, umidade, toxicidade, floração, notas, solos recomendados). Só os campos enviados mudam: `""` limpa um campo e `[]` limpa uma lista |
 | `create_species` ✎, `create_location` ✎ | Cria espécie/local (`exposedToRain` marca um local onde a chuva molha as plantas) |
+| `update_location` ✎ | Altera só os campos informados de um local (nome, descrição, coordenadas, `exposedToRain`) |
 
 ✎ = só aparece para tokens com `canWrite: true`.
 

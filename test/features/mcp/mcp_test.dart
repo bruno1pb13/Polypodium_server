@@ -78,7 +78,8 @@ class _FakeStore implements IGardenStore {
 
 extension on _FakeStore {
   List<PhotoRef> _allPhotos() {
-    final entries = (rows['entry'] ?? {}).values
+    final entries = (rows['entry'] ?? {})
+        .values
         .where((e) => e.payload['photoKey'] != null)
         .toList()
       ..sort((a, b) =>
@@ -279,8 +280,8 @@ void main() {
 
   Future<Map<String, Object?>> call(String tool, Map<String, Object?> args,
       {McpGrant grant = _writeGrant}) async {
-    final response =
-        await rpc('tools/call', params: {'name': tool, 'arguments': args}, grant: grant);
+    final response = await rpc('tools/call',
+        params: {'name': tool, 'arguments': args}, grant: grant);
     return response['result'] as Map<String, Object?>;
   }
 
@@ -298,12 +299,12 @@ void main() {
   group('protocol', () {
     test('initialize echoes a supported version, else offers the newest',
         () async {
-      final known = await rpc('initialize',
-          params: {'protocolVersion': '2025-03-26'});
+      final known =
+          await rpc('initialize', params: {'protocolVersion': '2025-03-26'});
       expect((known['result'] as Map)['protocolVersion'], '2025-03-26');
 
-      final unknown = await rpc('initialize',
-          params: {'protocolVersion': '2099-01-01'});
+      final unknown =
+          await rpc('initialize', params: {'protocolVersion': '2099-01-01'});
       final result = unknown['result'] as Map;
       expect(result['protocolVersion'], mcpProtocolVersions.first);
       expect((result['capabilities'] as Map).containsKey('tools'), isTrue);
@@ -336,11 +337,16 @@ void main() {
       expect(await names(_writeGrant), contains('add_entry'));
       expect(await names(_writeGrant), contains('update_species'));
       expect(await names(_readGrant), isNot(contains('update_species')));
+      expect(await names(_writeGrant), contains('update_location'));
+      expect(await names(_readGrant), isNot(contains('update_location')));
 
       final res = await rpc('tools/call',
           params: {
             'name': 'add_entry',
-            'arguments': {'plants': [_fern], 'type': 'irrigation'},
+            'arguments': {
+              'plants': [_fern],
+              'type': 'irrigation'
+            },
           },
           grant: _readGrant);
       expect((res['error'] as Map)['code'], -32602);
@@ -353,8 +359,7 @@ void main() {
       final result = ok(await call('list_plants', {}));
       expect(result['total'], 2); // the dead fern is filtered out
       final plants = {
-        for (final p in result['plants'] as List)
-          (p as Map)['nickname']: p,
+        for (final p in result['plants'] as List) (p as Map)['nickname']: p,
       };
       // Last watered by entry e2 (newer than the stored lastIrrigatedAt).
       expect(plants['Fern']!['lastWateredAt'], '2026-10-10T09:00:00.000');
@@ -446,7 +451,10 @@ void main() {
             'photoIds': [for (var i = 0; i < 7; i++) 'p$i'],
           })),
           contains('at most'));
-      expect(errorText(await call('get_photos', {'photoIds': ['nope']})),
+      expect(
+          errorText(await call('get_photos', {
+            'photoIds': ['nope']
+          })),
           contains('no photo found'));
     });
 
@@ -465,7 +473,8 @@ void main() {
         'date': '2026-10-12',
         'numericValue': 2,
       }));
-      expect((result['created'] as List).single, containsPair('plantId', _fern));
+      expect(
+          (result['created'] as List).single, containsPair('plantId', _fern));
 
       final change = store.received.single;
       expect(change.entityType, 'entry');
@@ -475,16 +484,14 @@ void main() {
       expect(change.payload['createdAt'], isNotNull);
     });
 
-    test('add_entry rejects types that are per plant only for a pot',
-        () async {
+    test('add_entry rejects types that are per plant only for a pot', () async {
       final result =
           await call('add_entry', {'potId': 'pot1', 'type': 'height'});
       expect(errorText(result), contains('whole pot'));
       expect(store.received, isEmpty);
     });
 
-    test('delete_entry tombstones it and rewinds the last watering',
-        () async {
+    test('delete_entry tombstones it and rewinds the last watering', () async {
       ok(await call('delete_entry', {'entryId': 'e2'}));
       final tombstone =
           store.received.firstWhere((c) => c.entityType == 'entry');
@@ -558,12 +565,16 @@ void main() {
       expect(errorText(await call('update_species', {'species': 'Rosa'})),
           contains('species not found'));
       expect(
-          errorText(await call('update_species',
-              {'species': 'sp1', 'recommendedSoilIds': ['lava']})),
+          errorText(await call('update_species', {
+            'species': 'sp1',
+            'recommendedSoilIds': ['lava']
+          })),
           contains('soil not found'));
       expect(
-          errorText(await call(
-              'update_species', {'species': 'sp1', 'floweringMonths': [13]})),
+          errorText(await call('update_species', {
+            'species': 'sp1',
+            'floweringMonths': [13]
+          })),
           contains('months 1-12'));
       expect(
           errorText(await call(
@@ -594,8 +605,8 @@ void main() {
   group('pots, cuttings and repotting', () {
     test('create_pot writes a bed row in the app\'s shape', () async {
       expect(
-          errorText(await call('create_pot',
-              {'name': 'X', 'locationId': 'nowhere'})),
+          errorText(
+              await call('create_pot', {'name': 'X', 'locationId': 'nowhere'})),
           contains('location not found'));
       expect(
           errorText(await call('create_pot', {'name': 'X', 'diameterCm': 0})),
@@ -649,8 +660,7 @@ void main() {
       expect(second['soilId'], 'sandy');
     });
 
-    test('repot_plant moves plants into a pot and records the move',
-        () async {
+    test('repot_plant moves plants into a pot and records the move', () async {
       final result = ok(await call('repot_plant', {
         'plants': ['AAAAAA', 'Spiky'],
         'pot': 'vaso grande',
@@ -706,13 +716,19 @@ void main() {
     });
 
     test('repot_plant only changing the soil leaves the pot alone', () async {
-      ok(await call('repot_plant', {'plants': ['Spiky'], 'soilId': 'loamy'}));
+      ok(await call('repot_plant', {
+        'plants': ['Spiky'],
+        'soilId': 'loamy'
+      }));
       final plant =
           store.received.firstWhere((c) => c.entityType == 'plant').payload;
       expect(plant['soilId'], 'loamy');
       expect(plant['locationId'], 'loc2');
-      expect(errorText(await call('repot_plant',
-              {'plants': ['Spiky'], 'pot': 'Nenhum'})),
+      expect(
+          errorText(await call('repot_plant', {
+            'plants': ['Spiky'],
+            'pot': 'Nenhum'
+          })),
           contains('pot not found'));
     });
   });
@@ -735,12 +751,12 @@ void main() {
       expect(extra.payload['entryId'], entryId);
       expect(extra.payload['photoKey'], '${extra.entityId}.png');
       expect(extra.payload['position'], 0);
-      expect(intake.saved.keys,
-          {'g1/$entryId.jpg', 'g1/${extra.entityId}.png'});
+      expect(
+          intake.saved.keys, {'g1/$entryId.jpg', 'g1/${extra.entityId}.png'});
 
       final photos = ok(await call('list_plant_photos', {'plant': 'Spiky'}));
-      expect((photos['photos'] as List).first,
-          containsPair('photoId', entryId));
+      expect(
+          (photos['photos'] as List).first, containsPair('photoId', entryId));
     });
 
     test('a bad photo fails the call before anything is written', () async {
@@ -777,14 +793,16 @@ void main() {
           {'data': 'jpg'},
         ],
       }));
-      final entry = store.received.firstWhere(
-          (c) => c.entityType == 'entry' && c.entityId == 'e1');
+      final entry = store.received
+          .firstWhere((c) => c.entityType == 'entry' && c.entityId == 'e1');
       expect(entry.payload['photoKey'], 'e1.png');
       expect(entry.payload['type'], 'irrigation'); // rest of the entry kept
-      expect(store.rows['entry_photo']!.values
-          .where((p) => p.payload['entryId'] == 'e1')
-          .single
-          .payload['position'], 0);
+      expect(
+          store.rows['entry_photo']!.values
+              .where((p) => p.payload['entryId'] == 'e1')
+              .single
+              .payload['position'],
+          0);
     });
 
     test('add_entry_photos keeps an entry within five photos', () async {
@@ -793,12 +811,14 @@ void main() {
         'photos': List.filled(4, {'data': 'jpg'}),
       });
       expect(errorText(result), contains('at most 5'));
-      expect(errorText(await call('add_entry_photos', {
-        'entryId': 'nope',
-        'photos': [
-          {'data': 'jpg'},
-        ],
-      })), contains('entry not found'));
+      expect(
+          errorText(await call('add_entry_photos', {
+            'entryId': 'nope',
+            'photos': [
+              {'data': 'jpg'},
+            ],
+          })),
+          contains('entry not found'));
       expect(store.received, isEmpty);
     });
   });
@@ -861,12 +881,52 @@ void main() {
       }));
       expect(store.rows['location']![created['id']]!.payload['exposedToRain'],
           isTrue);
-      final locations = (ok(await call('list_locations', {}))['locations']
-              as List)
-          .cast<Map<String, Object?>>();
+      final locations =
+          (ok(await call('list_locations', {}))['locations'] as List)
+              .cast<Map<String, Object?>>();
       final byName = {for (final l in locations) l['name']: l};
       expect(byName['Quintal']!['exposedToRain'], isTrue);
       expect(byName['Sala']!['exposedToRain'], isFalse);
+    });
+
+    test('update_location changes only the given fields', () async {
+      store.rows['location']!['loc2']!.payload['description'] = 'Janela';
+      final result = ok(await call('update_location', {
+        'location': 'Sala',
+        'latitude': -23.5,
+        'longitude': -46.6,
+        'exposedToRain': true,
+      }));
+      expect(result['changed'], ['latitude', 'longitude', 'exposedToRain']);
+      final change = store.received.single;
+      expect(change.entityType, 'location');
+      expect(change.entityId, 'loc2');
+      expect(change.payload['exposedToRain'], isTrue);
+      expect(change.payload['latitude'], -23.5);
+      expect(change.payload['name'], 'Sala');
+      expect(change.payload['description'], 'Janela');
+    });
+
+    test('update_location without changes writes nothing', () async {
+      // A payload from before the field counts as not exposed.
+      final result = ok(await call(
+          'update_location', {'location': 'loc2', 'exposedToRain': false}));
+      expect(result['changed'], isEmpty);
+      expect(store.received, isEmpty);
+    });
+
+    test('update_location validates what it is given', () async {
+      expect(errorText(await call('update_location', {'location': 'Quarto'})),
+          contains('location not found'));
+      expect(
+          errorText(await call(
+              'update_location', {'location': 'Sala', 'latitude': 10})),
+          contains('both latitude and longitude'));
+      expect(
+          errorText(await call(
+              'update_location', {'location': 'Sala', 'exposedToRain': 'sim'})),
+          contains('true or false'));
+      expect(store.received, isEmpty);
     });
 
     test('watering_advice names plants and locations, and filters', () async {
@@ -878,10 +938,20 @@ void main() {
             body: <String, Object?>{
               'generatedAt': '2026-10-12T18:00:00.000Z',
               'plants': <Map<String, Object?>>[
-                {'plantId': _fern, 'locationId': 'loc1', 'shiftDays': 2,
-                  'reason': 'rain', 'rainMm': 12.0},
-                {'plantId': _cactus, 'locationId': 'loc2', 'shiftDays': 0,
-                  'reason': 'none', 'rainMm': 0.0},
+                {
+                  'plantId': _fern,
+                  'locationId': 'loc1',
+                  'shiftDays': 2,
+                  'reason': 'rain',
+                  'rainMm': 12.0
+                },
+                {
+                  'plantId': _cactus,
+                  'locationId': 'loc2',
+                  'shiftDays': 0,
+                  'reason': 'none',
+                  'rainMm': 0.0
+                },
               ],
             },
             error: null,
