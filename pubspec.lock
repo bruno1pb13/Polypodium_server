@@ -316,12 +316,10 @@ packages:
   polypodium_core:
     dependency: "direct main"
     description:
-      path: "."
-      ref: "v0.2.0"
-      resolved-ref: "43f8f0297790686d61e45f4d73de68dc12e04e53"
-      url: "https://github.com/bruno1pb13/polypodium_core.git"
-    source: git
-    version: "0.2.0"
+      path: "../polypodium_core"
+      relative: true
+    source: path
+    version: "0.3.0"
   pool:
     dependency: transitive
     description:
