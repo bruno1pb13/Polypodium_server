@@ -1,13 +1,11 @@
-import 'dart:math' as math;
+import 'package:polypodium_core/weather.dart'
+    show baselineEt0Days, latestTimestamp, meanEt0, wateringDays, wateringLocalDate;
 
 import '../mcp/garden_store.dart';
 import 'watering_advice.dart';
 import 'weather_models.dart';
 import 'weather_repository.dart';
 import 'weather_service.dart';
-
-/// Days of history the "typical day" ET0 is averaged over.
-const _baselineDays = 30;
 
 /// Applies [adviseWatering] to every plant of a garden that the weather can
 /// say something about: active, with a watering interval, watered at least
@@ -45,7 +43,7 @@ class WateringAdvisor {
       final frequency = (p['irrigationFrequencyDays'] ??
           species[p['speciesId']]?['defaultIrrigationFrequencyDays']);
       if (frequency is! num || frequency < 1) continue;
-      final last = _latest(p['lastIrrigatedAt'] as String?, lastEntries[plant.id]);
+      final last = latestTimestamp(p['lastIrrigatedAt'] as String?, lastEntries[plant.id]);
       if (last == null) continue;
       final locationId = p['locationId'];
       final location = locations[locationId];
@@ -70,7 +68,7 @@ class WateringAdvisor {
       final clock = await _repo.regionClock(regionId);
       final lastDates = {
         for (final c in candidates)
-          c: _localDate(c.lastWateredAt, clock.utcOffset)
+          c: wateringLocalDate(c.lastWateredAt, clock.utcOffset)
       };
       final from = lastDates.values.reduce((a, b) => a.isBefore(b) ? a : b);
       final weather = await _regionWeather(regionId, from, clock.today);
@@ -117,14 +115,12 @@ class WateringAdvisor {
   Future<({Map<String, WeatherDay> days, double? baselineEt0})> _regionWeather(
       String regionId, DateTime from, DateTime today) async {
     final todayKey = dateKey(today);
-    final days = <String, WeatherDay>{
-      for (final d in await _repo.dailyBetween(regionId, dateKey(from), todayKey))
-        d.date: WeatherDay(rainMm: d.precipitationSum, et0: d.et0),
-    };
+    final observed =
+        await _repo.dailyBetween(regionId, dateKey(from), todayKey);
 
     final snapshots = await _repo.snapshots(regionId);
     final List<DailyWeather> forecast;
-    Map<String, DailyWeather> previous = const {};
+    List<DailyWeather> previous = const [];
     if (snapshots.isEmpty) {
       // Data fetched before snapshots existed: the latest forecast alone.
       forecast = await _repo.dailyBetween(regionId, todayKey, '9999-12-31');
@@ -133,28 +129,16 @@ class WateringAdvisor {
       forecast = latest.daily;
       for (final s in snapshots.skip(1)) {
         if (s.issuedOn.compareTo(latest.issuedOn) < 0) {
-          previous = {for (final d in s.daily) d.date: d};
+          previous = s.daily;
           break;
         }
       }
     }
-    for (final d in forecast) {
-      if (d.date.compareTo(todayKey) < 0) continue;
-      var rain = _likelyRain(d);
-      final before = previous[d.date];
-      if (rain != null && before != null) {
-        rain = math.min(rain, _likelyRain(before) ?? 0);
-      }
-      days[d.date] = WeatherDay(rainMm: rain, et0: d.et0);
-    }
+    final days = wateringDays(
+        today: today, observed: observed, forecast: forecast, previous: previous);
 
-    var baseline = await _repo.averageEt0(regionId, todayKey, _baselineDays);
-    if (baseline == null) {
-      final known = [for (final d in days.values) if (d.et0 != null) d.et0!];
-      if (known.isNotEmpty) {
-        baseline = known.reduce((a, b) => a + b) / known.length;
-      }
-    }
+    final baseline = await _repo.averageEt0(regionId, todayKey, baselineEt0Days) ??
+        meanEt0(days.values);
     return (days: days, baselineEt0: baseline);
   }
 }
@@ -173,28 +157,4 @@ class _Candidate {
   final String lastWateredAt;
   final int frequencyDays;
   final bool exposedToRain;
-}
-
-/// Forecast rain weighted by its probability (mm).
-double? _likelyRain(DailyWeather d) {
-  final rain = d.precipitationSum;
-  if (rain == null) return null;
-  return rain * (d.precipitationProbabilityMax ?? 100).clamp(0, 100) / 100;
-}
-
-/// The region-local calendar date of an ISO timestamp. The app writes local
-/// wall-clock times without an offset, taken as written; a UTC or offset
-/// time (written here) is shifted by the region's offset.
-DateTime _localDate(String iso, Duration utcOffset) {
-  var d = DateTime.parse(iso);
-  if (d.isUtc) d = d.add(utcOffset);
-  return DateTime.utc(d.year, d.month, d.day);
-}
-
-String? _latest(String? a, String? b) {
-  final da = a == null ? null : DateTime.tryParse(a);
-  final db = b == null ? null : DateTime.tryParse(b);
-  if (da == null) return db == null ? null : b;
-  if (db == null) return a;
-  return db.isAfter(da) ? b : a;
 }
