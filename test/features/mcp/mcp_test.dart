@@ -299,9 +299,10 @@ void main() {
   group('protocol', () {
     test('initialize echoes a supported version, else offers the newest',
         () async {
-      final known =
-          await rpc('initialize', params: {'protocolVersion': '2025-03-26'});
-      expect((known['result'] as Map)['protocolVersion'], '2025-03-26');
+      for (final v in ['2025-11-25', '2025-06-18', '2025-03-26']) {
+        final known = await rpc('initialize', params: {'protocolVersion': v});
+        expect((known['result'] as Map)['protocolVersion'], v);
+      }
 
       final unknown =
           await rpc('initialize', params: {'protocolVersion': '2099-01-01'});
@@ -851,10 +852,36 @@ void main() {
           headers: {'MCP-Protocol-Version': '1999-01-01'}));
       expect(res.statusCode, 400);
 
+      final current = await handler.post(post(
+          {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'},
+          headers: {'MCP-Protocol-Version': '2025-11-25'}));
+      expect(current.statusCode, 200);
+
       final bad = await handler.post(Request(
           'POST', Uri.parse('http://localhost/'),
           body: '{', context: {'mcpGrant': _readGrant}));
       expect(bad.statusCode, 400);
+    });
+
+    test('initialize negotiates in the body whatever the header says',
+        () async {
+      // Hermes sends its newest revision as a header on initialize too.
+      final res = await handler.post(post({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'initialize',
+        'params': {
+          'protocolVersion': '2099-01-01',
+          'capabilities': {},
+          'clientInfo': {'name': 'hermes-agent', 'version': '1'},
+        },
+      }, headers: {
+        'MCP-Protocol-Version': '2099-01-01'
+      }));
+      expect(res.statusCode, 200);
+      final body = jsonDecode(await res.readAsString()) as Map;
+      expect((body['result'] as Map)['protocolVersion'],
+          mcpProtocolVersions.first);
     });
 
     test('the middleware demands a token it can resolve', () async {
