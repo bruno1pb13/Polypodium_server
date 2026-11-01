@@ -5,7 +5,7 @@ import 'i_mcp_token_repository.dart';
 
 /// MCP revisions this server speaks, newest first. `initialize` echoes the
 /// client's when listed, else offers the newest.
-const mcpProtocolVersions = ['2025-06-18', '2025-03-26'];
+const mcpProtocolVersions = ['2025-11-25', '2025-06-18', '2025-03-26'];
 
 /// A tool failure the model should see and can recover from (bad
 /// arguments, unknown plant...). Reported as a tool result with

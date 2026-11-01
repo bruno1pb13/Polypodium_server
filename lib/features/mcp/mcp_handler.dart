@@ -16,10 +16,6 @@ class McpHandler {
   final McpServer _server;
 
   Future<Response> post(Request request) async {
-    final version = request.headers['mcp-protocol-version'];
-    if (version != null && !mcpProtocolVersions.contains(version)) {
-      return _rpcError(400, -32600, 'unsupported MCP-Protocol-Version: $version');
-    }
     final grant = request.context['mcpGrant'] as McpGrant;
 
     final bytes = await readBodyCapped(request, Config.maxMcpBodyBytes);
@@ -28,6 +24,17 @@ class McpHandler {
       message = jsonDecode(utf8.decode(bytes));
     } on FormatException {
       return _rpcError(400, -32700, 'parse error');
+    }
+
+    // The header is checked on every request after the handshake. On
+    // `initialize` the version is negotiated in the body instead, so a client
+    // that also sends its newest revision as a header (Hermes does) gets the
+    // newest one we speak rather than a 400.
+    final version = request.headers['mcp-protocol-version'];
+    if (version != null &&
+        !mcpProtocolVersions.contains(version) &&
+        !_isInitialize(message)) {
+      return _rpcError(400, -32600, 'unsupported MCP-Protocol-Version: $version');
     }
 
     // Batches were part of the 2025-03-26 revision; still answered.
@@ -48,6 +55,9 @@ class McpHandler {
         headers: {'Allow': 'POST'},
       );
 }
+
+bool _isInitialize(Object? message) =>
+    message is Map && message['method'] == 'initialize';
 
 Response _rpcError(int status, int code, String message) => _json(status, {
       'jsonrpc': '2.0',
